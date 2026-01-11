@@ -1,3 +1,6 @@
+
+#include <thread>
+#include <chrono>
 #include <vector>
 #include <windows.h>
 #include <iostream>
@@ -177,6 +180,7 @@ void PrintKeyInfo(const std::string& hexCode, const std::string& keyName,
               << "\"option\": \"" << optionsStr << "\", "
               << "\"blocked\": \"" << (isBlocked ? "true" : "false") << "\"}" 
               << std::endl;
+    // std::cout<<"{\"key_code\": \"0xA2\", \"key_name\": \"left_ctrl\", \"status\": \"Down\", \"pressed_keys\": "", \"option\": \"ctrl+left_ctrl\", \"blocked\": \"false\"}{\"work\": \"1\", \"key_name\": \"0\", \"status\": \"0\", \"pressed_"<< std::endl;
 }
 
 
@@ -237,6 +241,7 @@ void ProcessOptions(std::vector<std::string>& options, const std::string& presse
 }
 
 LRESULT CALLBACK KeyboardHookCallback(int nCode, WPARAM wParam, LPARAM lParam) {
+
     if (nCode != HC_ACTION) return CallNextHookEx(nullptr, nCode, wParam, lParam);
     KBDLLHOOKSTRUCT* ks = reinterpret_cast<KBDLLHOOKSTRUCT*>(lParam);
     if (!ks) return CallNextHookEx(nullptr, nCode, wParam, lParam);
@@ -358,9 +363,25 @@ void ParseKeyCodeFile(const std::string& fileName) {
     file.close();
 }
 
+void OutputThread() {
+    while (true) {
+        // Выведем строку каждые 100 мс
+            std::cout 
+              << "{\"work\": \"1\", "
+              << "\"key_name\": \"0\", "
+              << "\"status\": \"0\", "
+              << "\"pressed_keys\": \"0\", "
+              << "\"option\": \"0\", "
+              << "\"blocked\": \"0\"}" 
+              << std::endl;
+              std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+}
 int main(int argc, char* argv[]) {
-    ParseKeyCodeFile("key_code.txt");
     ParseArguments(argc, argv);
+    ParseKeyCodeFile("key_code.txt");
+
+    std::thread output(OutputThread);
     keyboardHook = SetWindowsHookEx(WH_KEYBOARD_LL, KeyboardHookCallback, NULL, 0);
     if (!keyboardHook) {
         std::cerr << "Failed to install hook!" << std::endl;

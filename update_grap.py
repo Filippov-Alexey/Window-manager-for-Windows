@@ -1,9 +1,11 @@
 from numba import prange
 from variable import *
+import zlib
 import socket
 import json
-
-
+import pygetwindow as gw
+title=''
+active_title=''
 def hex_to_rgb(hex_color):
     hex_color = hex_color.lstrip('#')
     return tuple(int(hex_color[i:i + 2], 16) for i in (0, 2, 4))
@@ -61,7 +63,7 @@ def draw_gradient_line(canvas, x1, y1, x2, y2, color_start, color_end, line_widt
     r1, g1, b1 = hex_to_rgb(color_start)
     r2, g2, b2 = hex_to_rgb(color_end)
 
-    for i in range(steps):
+    for i in prange(steps):
         ratio = i / (steps - 1)
         r = int(r1 + (r2 - r1) * ratio)
         g = int(g1 + (g2 - g1) * ratio)
@@ -74,80 +76,117 @@ def draw_gradient_line(canvas, x1, y1, x2, y2, color_start, color_end, line_widt
         tags = f"win_{x1}_{y1}_{x2}_{y2}"
         item_id=canvas.create_line(intermediate_x, intermediate_y, next_x, next_y,
                         fill=color, width=line_width, tags=tags)
-        canvas.addtag_withtag("icon", item_id)  # Добавляем тег "icon" для управления
+        canvas.addtag_withtag(["icon",tags], item_id)  # Добавляем тег "icon" для управления
+visible_length=20
+index=-visible_length
+full_string=''
+def update_title(canvas, tit):
+    global active_title, index, title, full_string
+    if len(tit[0][1])>visible_length:
+        s = tit[0][1][:visible_length*2]+'...'
+    else:
+        s = tit[0][1][:visible_length*2]
 
+    if active_title != s or index >= len(full_string):
+        active_title = s
+        index = 0
+        preamble_spaces = ' ' * visible_length
+        full_string = preamble_spaces + s + preamble_spaces
+
+    d = full_string[index % len(full_string):index % len(full_string) + visible_length]
+
+    while d.isspace():
+        index += 1
+        d = full_string[index % len(full_string):index % len(full_string) + visible_length]
+
+    if title == '':
+        title = canvas.create_text(1000, RECT_HEIGHT // 2, text=d, anchor="e", fill="white", font=("Consolas", 11))
+        canvas.addtag_withtag("icon", title)
+    else:
+        canvas.itemconfigure(title, text=d)
+
+    index += 1
+ac=[]
+d=None
+tit=None
+aw=None
 def update_grap(canvas, root):
-    global points
+    global points,tit,active_title,ac,d,aw
+    
     points = points or []  # Например, если points не инициализирован
     active_points = []
     
     try:
-        client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        client_socket.connect(('localhost', 65432))
-        
-        # Получаем данные
-        data = client_socket.recv(2048)
-        client_socket.close()
-        if not data:  # проверяем, что данные не пустые
-            print("No data received from server.")
-            # return
-        else:
-            
-            open_windows = data.decode('utf-8')
-            
-            if open_windows:  # проверяем, что строка не пустая
-                tit = json.loads(open_windows)
+        if not tit is None:
+            update_title(canvas, tit)
+        acw=f'{gw.getActiveWindow()}'
+        # time.sleep(0.1)
+        if acw!=aw:
+            aw=acw
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
 
-                scale_left = scale_top = scale_right = scale_bottom = 0
-                rects = [w[3] for w in tit] if tit else []
+                # client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                client_socket.connect(('localhost', 65432))
                 
-                for i in prange(len(rects) - 1, -1, -1):
-                    normalized_path = os.path.normpath(tit[i][2])
-                    if normalized_path in win_rect:
-                        scale_left, scale_top, scale_right, scale_bottom = win_rect[normalized_path]
-                        
-                    rect = rects[i]
-                    left, top, right, bottom = rect
+                # Получаем данные
+                data = client_socket.recv(2048)
+                # client_socket.close()
 
-                    new_left = left + (right - left) * (1 - scale_left) + 1
-                    new_top = top + (bottom - top) * (1 - scale_top)
-                    new_right = right - (right - left) * (1 - scale_right) + 1
-                    new_bottom = bottom - (bottom - top) * (1 - scale_bottom)
+                if d != data:
+                    d=zlib.decompress(data)
+                    open_windows = d.decode('utf-8')
+                    
+                    tit = json.loads(open_windows)
 
-                    higher = rects[:i]
-                    segs = visible_border_segments((new_left, new_top, new_right, new_bottom), higher)
+                    scale_left = scale_top = scale_right = scale_bottom = 0
+                    rects = [w[3] for w in tit] if tit else []
+                    
+                    for i in prange(len(rects) - 1, -1, -1):
+                        normalized_path = os.path.normpath(tit[i][2])
+                        if normalized_path in win_rect:
+                            scale_left, scale_top, scale_right, scale_bottom = win_rect[normalized_path]
+                            
+                        rect = rects[i]
+                        left, top, right, bottom = rect
 
-                    for s in segs:
-                        x1, y1, x2, y2 = s
-                        active_points.append((x1, y1, x2, y2))
-                        
-                        if (x1, y1, x2, y2) not in points:  
-                            points.append((x1, y1, x2, y2))
+                        new_left = left + (right - left) + scale_left
+                        new_top = top + (bottom - top) + scale_top
+                        new_right = right - (right - left) - scale_right
+                        new_bottom = bottom - (bottom - top) - scale_bottom
 
-                            if x1 == x2:  
-                                draw_gradient_line(canvas, x1, y1, x2, y2, '#d80303', '#0a0094', line_width=5)
-                            else: 
-                                color = '#d80303' if y1 == new_top else '#0a0094'
-                                draw_gradient_line(canvas, x1, y1, x2, y2, color, color, line_width=5)                
+                        higher = rects[:i]
+                        segs = visible_border_segments((new_left, new_top, new_right, new_bottom), higher)
 
-                a = list(set(points) - set(active_points))
-                remove = []
-                for item in points:
-                    if item in a:
-                        x1, y1, x2, y2 = item
-                        tag = f"win_{x1}_{y1}_{x2}_{y2}"
-                        canvas.delete(tag)
-                        remove.append(item)
+                        for s in segs:
+                            x1, y1, x2, y2 = s
+                            active_points.append((x1, y1, x2, y2))
+                            
+                            if (x1, y1, x2, y2) not in points:  
+                                points.append((x1, y1, x2, y2))
 
-                points = [item for item in points if item not in remove]
-        
+                                if x1 == x2:  
+                                    draw_gradient_line(canvas, x1, y1, x2, y2, '#d80303', '#0a0094', line_width=5)
+                                else: 
+                                    color = '#d80303' if y1 == new_top else '#0a0094'
+                                    draw_gradient_line(canvas, x1, y1, x2, y2, color, color, line_width=5)                
+
+                    a = list(set(points) - set(active_points))
+                    if ac!=a:
+                        ac=a
+                        remove = []
+                        for item in points:
+                            if item in a:
+                                x1, y1, x2, y2 = item
+                                tag = f"win_{x1}_{y1}_{x2}_{y2}"
+                                canvas.delete(tag)
+                                remove.append(item)
+
+                        points = [item for item in points if item not in remove]
+            
     except (socket.error, json.JSONDecodeError) as e:
         print(f"Socket/JSON Error: {e}")
         
     except Exception as e:
         print(f"UG An error occurred: 0{e}")
     
-    finally:
-        if client_socket:
-            client_socket.close()  
     root.after(UPDATE_GRAPMS, lambda: update_grap(canvas,root))
