@@ -1,13 +1,122 @@
 import socket
 import json
 import pygetwindow
+import zlib
+import ast
 from threading import Thread
-from update_icons import get_executable_paths_with_open_windows
 from variable import *
 from windows_controle import *
-
+from PIL import Image
+import subprocess
+import win32gui
+import win32process
+import win32api
+import win32ui
+import win32con
+import logger
+log=logger.setup_logging()
 aw = []
-serialized_data = ''
+serialized_data = ''.encode()
+def extract_icon_from_exe(path, index=0, size=2 , save_to=None):
+    log.log('run')
+    large, small = win32gui.ExtractIconEx(path, index)
+    hicon = None
+    
+    if size <= 32 and small:
+        hicon = small[0]
+    elif large:
+        hicon = large[0]
+    elif small:
+        hicon = small[0]
+
+    if not hicon:
+        raise FileNotFoundError("Icon not found in: " + path)
+
+    hdc_screen = win32gui.GetDC(0)
+    hdc = win32ui.CreateDCFromHandle(hdc_screen)
+    mem_dc = hdc.CreateCompatibleDC()
+    bmp = win32ui.CreateBitmap()
+    bmp.CreateCompatibleBitmap(hdc, size, size)
+
+    mem_dc.SelectObject(bmp)
+    win32gui.DrawIconEx(mem_dc.GetHandleOutput(), 0, 0, hicon, size, size, 0, None, win32con.DI_NORMAL)
+
+    bmpinfo = bmp.GetInfo()
+    bmpstr = bmp.GetBitmapBits(True)
+    
+    img = Image.frombuffer(
+        'RGBA',
+        (bmpinfo['bmWidth'], bmpinfo['bmHeight']),
+        bmpstr, 'raw', 'BGRA', 0, 1
+    )
+
+    if save_to:
+        img.save(save_to)
+
+    win32gui.DestroyIcon(hicon)
+    mem_dc.DeleteDC()
+    hdc.DeleteDC()
+    win32gui.ReleaseDC(0, hdc_screen)
+
+    return img
+
+def bring_window_to_front(hwnd):
+    try:
+        if not win32gui.IsWindow(hwnd):
+            return
+        if win32gui.IsIconic(hwnd):
+            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+        else:
+            win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
+
+        try:
+            win32gui.SetForegroundWindow(hwnd)
+        except Exception as e:
+            fg = win32gui.GetForegroundWindow()
+            if fg:
+                cur_thread = win32api.GetCurrentThreadId()
+                fg_thread = win32process.GetWindowThreadProcessId(fg)[0]
+                try:
+                    win32process.AttachThreadInput(cur_thread, fg_thread, True)
+                    win32gui.SetForegroundWindow(hwnd)
+                finally:
+                    win32process.AttachThreadInput(cur_thread, fg_thread, False)
+
+        win32gui.SetWindowPos(hwnd, win32con.HWND_TOPMOST, 0,0,0,0,
+                              win32con.SWP_NOMOVE | win32con.SWP_NOSIZE)
+        win32gui.SetWindowPos(hwnd, win32con.HWND_NOTOPMOST, 0,0,0,0,
+                              win32con.SWP_NOMOVE | win32con.SWP_NOSIZE)
+    except Exception as ex:
+        log.error('Error bringing window to front:', ex)
+def get_executable_paths_with_open_windows(exe=None):
+    args = ['getwin.exe']
+    
+    if exe:
+        args.append(exe)
+        
+    try:
+        result = subprocess.run(
+            args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=True,
+            encoding='utf-8'
+        )
+        
+        if result.stdout:
+            out = result.stdout
+            try:
+                # Пробуем декодировать вывод 
+                out_utf8_string = ast.literal_eval(out)
+                return out_utf8_string
+            except Exception as decode_ex:
+                log.error(f"Decoding error: {decode_ex}")
+        
+    except subprocess.CalledProcessError as e:
+        log.error(f"Error when executing command: {e.stderr}")
+
+    return None
 
 class WindowServer:
     def __init__(self):
@@ -20,45 +129,44 @@ class WindowServer:
         self.clients.append(conn)
 
         current_window = pygetwindow.getActiveWindow()
-        if current_window!="pop" and not current_window in patterns:
+        if current_window is not None and not current_window in patterns:
 
-            if new_win_open_max and current_window is not None and current_window.isMaximized:
-                current_window.restore()
-                set_window_position(current_window, winpos['max'])
                 
-            if current_window is not None:
-                self.current_attributes = {
-                    'title': current_window.title,
-                    'left': current_window.left,
-                    'top': current_window.top,
-                    'width': current_window.width,
-                    'height': current_window.height,
-                    'hwnd': current_window._hWnd,
-                }
-                if self.current_window_attributes is None or \
-                    self.current_attributes != self.current_window_attributes:
-                    self.current_window_attributes = self.current_attributes  
-                    self.open_windows = get_executable_paths_with_open_windows()  
-                    if aw != self.open_windows and not self.open_windows is None:
-                        current_windows_set = set(i[0] for i in aw)
-                        open_windows_set = set(i[0] for i in self.open_windows)
+            # if current_window is not None:
+            self.current_attributes = {
+                'title': current_window.title,
+                'left': current_window.left,
+                'top': current_window.top,
+                'width': current_window.width,
+                'height': current_window.height,
+                'right': current_window.left+current_window.width,
+                'bottom': current_window.top+current_window.height,
+                'hwnd': current_window._hWnd,
+            }
+            if self.current_window_attributes is None or \
+                self.current_attributes != self.current_window_attributes:
+                self.current_window_attributes = self.current_attributes  
+                self.open_windows = get_executable_paths_with_open_windows()  
+                if aw != self.open_windows and not self.open_windows is None:
+                    current_windows_set = set(i[0] for i in aw)
+                    open_windows_set = set(i[0] for i in self.open_windows)
 
-                        new_windows_ids = open_windows_set - current_windows_set
+                    new_windows_ids = open_windows_set - current_windows_set
+                 
+                    for window_id in new_windows_ids:
+                        full_element = next((elem for elem in self.open_windows if elem[0] == window_id), None)
+                        
+                        if full_element:
+                            if current_window._hWnd == full_element[0]:
+                                try:
+                                    winmove('up', current_window, 1)
+                                except Exception as e:
+                                    log.error(f"err={e}")
 
-                        for window_id in new_windows_ids:
-                            full_element = next((elem for elem in self.open_windows if elem[0] == window_id), None)
-                            
-                            if full_element:
-                                if current_window._hWnd == full_element[0]:
-                                    try:
-                                        winmove('right', current_window, 1)
-                                    except Exception as e:
-                                        print(f"err={e}")
-
-                        aw = self.open_windows
-                    if self.open_windows is not None and len(self.open_windows) > 0:
-                        serialized_data = json.dumps(self.open_windows).encode('utf-8')
-
+                    aw = self.open_windows
+                if self.open_windows is not None and len(self.open_windows) > 0:
+                    serialized_data = zlib.compress(json.dumps(self.open_windows).encode('utf-8',errors='replace'))
+            conn.sendall(f'{len(serialized_data)}'.encode())  
             conn.sendall(serialized_data)  
 
         self.clients.remove(conn)
@@ -66,18 +174,16 @@ class WindowServer:
     def run_server(self):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
             server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            server_socket.bind(('localhost', 65432))
-            server_socket.listen(5)
-            print("Server is listening on port 65432...")
+            server_socket.bind(('localhost', ports['get_win']))
+            server_socket.listen(10)
+            log.info("Server is listening on port ports['get_win']...")
 
             while True:
-                # print('ws')
                 try:
                     conn, addr = server_socket.accept()
-                    # print(f"Connection established with {addr}")
                     Thread(target=self.handle_client, args=(conn, addr)).start()
                 except Exception as e:
-                    print(f"An error occurred accepting a new connection: {e}")
+                    log.error(f"An error occurred accepting a new connection: {e}")
 
 if __name__ == "__main__":
     window_server = WindowServer()

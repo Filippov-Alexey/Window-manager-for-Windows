@@ -1,85 +1,74 @@
-import time
-import socket
-import json
-from icecream import ic
 from variable import *
 from windows_controle import *
-import mouse
 import pygetwindow
 import threading
 import subprocess
-ic.configureOutput(includeContext=True)
+import socket
+import logger
+log=logger.setup_logging()
+
 stop_event = threading.Event()
 indexwin=0
 active_win=[]
-
+w=None
 i=1
-def run_command(hotkey):
-    command=hot_key.get(hotkey)
-    ic(command)
-    if command:
-        subprocess.run([command])
+cur={}
+
 def handle_key_press(out):
-    global i
-    if out.get('status') == 'Up':
-        valu=[]
-        item=out.get('option')
-        if ', 'in item:
-            for key in item.split(', '):
-                valu.append(key)
+    global i, w, event, cur
+    
+    if out.get('isInjected') != 'Physical':
+        return
+
+    items = out.get('option', [])
+    valu = {key for item in items for key in item.split(', ')}
+    
+    w = pygetwindow.getActiveWindow()
+    log.info(out)
+    
+    if w and w.title != TITLE:
+        if out.get('status') == 'Up':
+            for value in valu:
+                if value in ACTIONS:
+                    ACTIONS[value](w, i)
+                    break
+
+                elif value == 'left_win' and cur and cur.get('option', [None])[0] == value:
+                    if cur.get('status') == 'Down':
+                        subprocess.run(['press', 'left_win'])
+                        break
         else:
-            valu.append(item)
-        valu = list(dict.fromkeys(valu))
-        ic(valu)
-        w = pygetwindow.getActiveWindow()
-        for value in valu:
-            if value == 'left_win+delete':
-                ic("close")
-                if w is not None:
-                    w.close()
-            elif value in ['pause', 'left_shift+pause']:
-                mouse.click('right')
-            elif value == 'left_win+arrow_right':
-                winmove('right',w,i)
-            elif value == 'left_win+arrow_left':
-                winmove('left',w,i)
-            elif value == 'left_win+arrow_up':
-                winmove('up',w,i)
-            elif value == 'left_win+arrow_down':
-                winmove('down',w,i)
-            else:
-                run_command(value)
+            for value in valu:
+                if value == 'left_win+space':
+                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
+                        client_socket.connect(('localhost', ports['get_win']))
+                        m = client_socket.recv(4).decode('utf-8', errors='replace')
+                        data = client_socket.recv(int(m))
+        
+                        open_windows = zlib.decompress(data).decode('utf-8')
+                        tit = json.loads(open_windows)
+                        rects = [w[0] for w in tit] if tit else []
+                        current_id = out.get('layout')['ID']  # Ваше значение '0x0422'
+                        hkl_hex=get_next_layout_hkl(current_id)
+                        for hwnd in rects:
+                            subprocess.run(['layout.exe',f'{hwnd}',f'{hkl_hex}'])
+                    break
+
+    cur = out
 
 def start_client():
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
-        client_socket.connect(('localhost', 65431))
-        print("Connected to server. key")
-        buffer = ""
+        client_socket.connect(('localhost', ports['get_key']))
+        log.info("Connected to server. key")
 
         while True:
-            # print(90)
-            time.sleep(0.1)
             try:
-                # Получаем данные
-                data = client_socket.recv(1024).decode('utf-8', errors='replace')
-                # ic(data)
-                if not data:
-                    continue
-                    # break
-
-                buffer += data  # Добавляем данные в буфер
-                # Проверяем, есть ли полные сообщения (разделенные новой строкой)
-                while '\n' in buffer:
-                    message, buffer = buffer.split('\n', 1)  # Разделяем на первое сообщение и оставшуюся часть
-                    try:
-                        # Парсим JSON
-                        handle_key_press(json.loads(message.strip()))  # Убираем пробелы вокруг
-                    except json.JSONDecodeError as e:
-                        print(f"JSON decoding error: {e} for message: {message.strip()}")
+                m = client_socket.recv(4).decode('utf-8', errors='replace')
+                message = client_socket.recv(int(m)).decode('utf-8', errors='replace')
+                handle_key_press(json.loads(message))
             
             except Exception as e:
-                print(f"KeyMan An error occurred: {e}")
-                # break
+                log.error(f"KeyMan An error occurred: {e}")
 
 if __name__ == "__main__":
     start_client()
