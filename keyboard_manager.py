@@ -49,9 +49,13 @@ def handle_key_press(out):
                         tit = json.loads(open_windows)
                         rects = [w[0] for w in tit] if tit else []
                         current_id = out.get('layout')['ID']  # Ваше значение '0x0422'
-                        hkl_hex=get_next_layout_hkl(current_id)
-                        for hwnd in rects:
-                            subprocess.run(['layout.exe',f'{hwnd}',f'{hkl_hex}'])
+                        try:
+                            hkl_hex=get_next_layout_hkl(current_id)[0]
+                            log.info(hkl_hex)
+                            for hwnd in rects:
+                                subprocess.run(['layout.exe',f'{hwnd}',f'{hkl_hex}'])
+                        except Exception as e:
+                            log.error(f'kl{e}')
                     break
 
     cur = out

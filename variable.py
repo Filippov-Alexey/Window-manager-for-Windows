@@ -3,23 +3,45 @@ import os
 from pathlib import Path
 from screeninfo import get_monitors
 from windows_controle import winmove
-import py_win_keyboard_layout
-layouts = py_win_keyboard_layout.get_keyboard_layout_list()
+import win32api
+import ctypes
+import logger
+log=logger.setup_logging()
+def get_layout_names():
+    LOCALE_SLANGUAGE = 0x0002 
+    layout_ids = win32api.GetKeyboardLayoutList()
+    layouts = []
+    for hkl in layout_ids:
+        lang_id = hkl & (0xFFFF)
+        buffer = ctypes.create_unicode_buffer(256)
+        
+        if ctypes.windll.kernel32.GetLocaleInfoW(lang_id, LOCALE_SLANGUAGE, buffer, 256):
+            layouts.append([f"0x{lang_id:04x}",buffer.value])
+    return layouts
+layouts=get_layout_names()
+
 def get_index_layout_list(current_id):
+    log.warning(current_id)
     current_index = -1
-    for i, k in enumerate(layouts):
-        if f"0x{(k & 0xFFFF):04x}" == current_id:
-            current_index = i
-            break
+    try:
+        for i,k in enumerate(layouts):
+            log.info(f'{i}={k}')
+            if k[0] == current_id:
+                current_index = i
+                break
+    except Exception as e:
+        log.error(e)
     return current_index
 def get_next_layout_hkl(current_id):
     current_index=get_index_layout_list(current_id)
-    if current_index != -1:
-        next_index = (current_index + 1) % len(layouts)
-        next_hkl = layouts[next_index]
-        
-        hkl_hex = f"0x{next_hkl:016x}" 
-        return hkl_hex
+    log.info(f'gnlk={current_index}+{type(current_index)}-{len(layouts)}')
+    try:
+        if current_index != -1:
+            next_index = (current_index + 1) % len(layouts)
+            log.warning(layouts[next_index])
+            return layouts[next_index]
+    except Exception as e:
+        print(e)
     return None
 w = get_monitors()[0].width
 h = get_monitors()[0].height
