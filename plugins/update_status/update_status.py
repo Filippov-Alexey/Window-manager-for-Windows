@@ -145,14 +145,40 @@ timers = {
     "layout": 0, "time": 0, "network": 0, "cpu": 0,
     "ram": 0, "disk": 0, "gpu": 0, "volume": 0
 }
-
 class update_status:
     def __init__(self, canvas, root, RECT, w):
          self.canvas=canvas
          self.root=root
          self.w=w
          self.RECT=RECT
+         self.lay= False
+         self.current_hkl=0
          threading.Thread(target=self.listen_keyboard, daemon=True).start()
+
+    def draw_layouts(self, current_id):
+        self.canvas.delete('lay_item', 'lay')
+        l = len(layouts)
+        x1 = scr_w - menu_width - padding
+        y1 = scr_h - (l * row_height) - padding
+        x2 = scr_w - padding
+        y2 = scr_h - padding
+
+        self.canvas.create_rectangle(x1, y1, x2, y2, fill=color_bg_menu, tags='lay')
+
+        current_y = y1 + 5
+        
+        for hkl_hex, full_name in layouts:
+            display_text = full_name.split('(')[-1].split(')')[0] if '(' in full_name else full_name
+            
+            if hkl_hex == current_id:
+                self.canvas.create_rectangle(x1, current_y - 2, x2, current_y + 22, 
+                                             fill=color_seletc_menu, tags='lay_item')
+            
+            self.canvas.create_text(x1 + 10, current_y, anchor='nw', 
+                                    text=display_text, fill='white', 
+                                    font=('Arial', 10, 'bold'), tags='lay_item')
+            
+            current_y += row_height
     def listen_keyboard(self):
         global layout
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -162,8 +188,24 @@ class update_status:
                     m = s.recv(4).decode('utf-8', errors='replace')
                     buffer=s.recv(int(m)).decode('utf-8', errors='replace').strip()
                     data = json.loads(buffer)
+                    op=data.get('option')
+                    keyname=data.get('key_name')
                     key = data.get('layout')
+                    status=data.get('status')
                     layout=key['Name'][:2].upper()
+                    if 'left_win+space' in op:
+                        if status == 'Down':
+                            self.current_hkl = get_next_layout_hkl(key['ID'])[0]
+                            
+                            if not self.lay:
+                                self.lay = True
+                            
+                            self.draw_layouts(self.current_hkl)
+
+                    elif self.lay and keyname == 'left_win':
+                        self.lay = False
+                        self.canvas.delete('lay')
+                        self.canvas.delete('lay_item')
                 except Exception as e:
                     log.error(f'US-{e}')
 

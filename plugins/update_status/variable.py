@@ -26,4 +26,13 @@ if not orientation:
 else:
     x=RECT // 2
     pos = [(x, y) for y in [15,35,55,85,105,125,145,175]]
- 
+
+scr_w, scr_h = extension[0], extension[1]
+        
+menu_width = 200
+row_height = 30
+padding = 10
+
+color_bg_menu='green'
+color_seletc_menu='red'
+
