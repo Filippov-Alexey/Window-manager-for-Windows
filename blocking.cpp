@@ -226,7 +226,9 @@ void PrintKeyInfo(const std::string& hexCode, const std::string& keyName,
                   const std::string& status,DWORD duration, 
                   const std::vector<std::string>& options,
                   const std::string& block, const std::string& isInjected, 
-                  const std::string& register_key, const std::string& currentInfo) {
+                  const std::string& register_key, const std::string& currentInfo,
+                  const std::string& panel 
+                ) {
 
     std::string optionsStr;
     for (const auto& option : options) {
@@ -245,6 +247,7 @@ std::cout
     << "\"key\": \""           << json_escape(register_key) << "\", "
     << "\"status\": \""        << status << "\", "
     << "\"duretion\": \""      << duration << "\", "
+    << "\"numpan\": \""        << panel << "\", "
     << "\"pressed_keys\": \""  << pressedKeys << "\", "
     << "\"option\": ["         << optionsStr << "], "
     << "\"blocked\": \""       << block << "\", "
@@ -348,16 +351,37 @@ void get_layout(){
 }
 
 std::unordered_map<int, DWORD> startTimes;
+
 LRESULT CALLBACK KeyboardHookCallback(int nCode, WPARAM wParam, LPARAM lParam) {
     if (nCode != HC_ACTION) return CallNextHookEx(nullptr, nCode, wParam, lParam);
     KBDLLHOOKSTRUCT* pKeyStruct = (KBDLLHOOKSTRUCT*)lParam;
     KBDLLHOOKSTRUCT* ks = reinterpret_cast<KBDLLHOOKSTRUCT*>(lParam);
     if (!ks) return CallNextHookEx(nullptr, nCode, wParam, lParam);
     bool isInjected = pKeyStruct->flags & LLKHF_INJECTED;
-    
+
     const int vk = static_cast<int>(ks->vkCode);
     const bool isKeyDown = (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN);
     const bool isKeyUp = (wParam == WM_KEYUP || wParam == WM_SYSKEYUP);
+    const bool isExtended = (ks->flags & LLKHF_EXTENDED);
+
+    std::string panel = "Main";
+    std::string status = "";
+
+    // 1. Определение панели (Main vs NumPad)
+    // Добавляем VK_CLEAR (это 5-ка при выключенном NumLock)
+    if ((vk >= VK_NUMPAD0 && vk <= VK_NUMPAD9) || vk == VK_MULTIPLY || 
+        vk == VK_ADD || vk == VK_SUBTRACT || vk == VK_DECIMAL || vk == VK_CLEAR) {
+        panel = "NumPad";
+    } 
+    else if (vk == VK_DIVIDE || vk == VK_RETURN) {
+        panel = (ks->flags & LLKHF_EXTENDED) ? "NumPad" : "Main";
+    } 
+    else if (vk == VK_HOME || vk == VK_END || vk == VK_PRIOR || vk == VK_NEXT || 
+             vk == VK_INSERT || vk == VK_DELETE || 
+             vk == VK_UP || vk == VK_DOWN || vk == VK_LEFT || vk == VK_RIGHT) {
+        // Для этих клавиш: нет флага Extended = NumPad
+        panel = (ks->flags & LLKHF_EXTENDED) ? "Main" : "NumPad";
+    }
     
     
     std::string register_key;
@@ -449,7 +473,7 @@ LRESULT CALLBACK KeyboardHookCallback(int nCode, WPARAM wParam, LPARAM lParam) {
     
     isBlocked = !pressedKeys.empty();
     
-    PrintKeyInfo(VKCodeToHex(vk), keyName, pressedKeys, (isKeyDown ? "Down" : (isKeyUp ? "Up" : "None")), duration, options, (isBlocked?"Blocked":"No blocked"), (isInjected?"Programm":"Physical"), register_key, currentInfo);
+    PrintKeyInfo(VKCodeToHex(vk), keyName, pressedKeys, (isKeyDown ? "Down" : (isKeyUp ? "Up" : "None")), duration, options, (isBlocked?"Blocked":"No blocked"), (isInjected?"Programm":"Physical"), register_key, currentInfo, panel);
     
     if (isBlocked&&!isInjected) return 1;
     return CallNextHookEx(nullptr, nCode, wParam, lParam);
