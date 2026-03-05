@@ -9,6 +9,7 @@
 #include <iomanip>
 #include <map>
 #include <fstream>
+#include <unordered_map>
 #include <unordered_set>
 #include <algorithm>
 #include <mutex> 
@@ -222,7 +223,7 @@ std::string json_escape(const std::string& s) {
 
 void PrintKeyInfo(const std::string& hexCode, const std::string& keyName, 
                   const std::string& pressedKeys, 
-                  const std::string& status, 
+                  const std::string& status,DWORD duration, 
                   const std::vector<std::string>& options,
                   const std::string& block, const std::string& isInjected, 
                   const std::string& register_key, const std::string& currentInfo) {
@@ -243,6 +244,7 @@ std::cout
     << "\"key_name\": \""      << json_escape(keyName) << "\", "
     << "\"key\": \""           << json_escape(register_key) << "\", "
     << "\"status\": \""        << status << "\", "
+    << "\"duretion\": \""      << duration << "\", "
     << "\"pressed_keys\": \""  << pressedKeys << "\", "
     << "\"option\": ["         << optionsStr << "], "
     << "\"blocked\": \""       << block << "\", "
@@ -344,6 +346,8 @@ void get_layout(){
         currentInfo = g_pipeData;
     }
 }
+
+std::unordered_map<int, DWORD> startTimes;
 LRESULT CALLBACK KeyboardHookCallback(int nCode, WPARAM wParam, LPARAM lParam) {
     if (nCode != HC_ACTION) return CallNextHookEx(nullptr, nCode, wParam, lParam);
     KBDLLHOOKSTRUCT* pKeyStruct = (KBDLLHOOKSTRUCT*)lParam;
@@ -354,6 +358,7 @@ LRESULT CALLBACK KeyboardHookCallback(int nCode, WPARAM wParam, LPARAM lParam) {
     const int vk = static_cast<int>(ks->vkCode);
     const bool isKeyDown = (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN);
     const bool isKeyUp = (wParam == WM_KEYUP || wParam == WM_SYSKEYUP);
+    
     
     std::string register_key;
     
@@ -406,7 +411,22 @@ LRESULT CALLBACK KeyboardHookCallback(int nCode, WPARAM wParam, LPARAM lParam) {
     
     ProcessKeyName(keyName, currentlyPressedKeys, pressShift, pressCtrl, pressAlt, pressedKeys, options);
     ProcessOptions(options, pressedKeys);
-    
+    DWORD duration = 0;
+
+    if (isKeyDown) {
+        if (startTimes.find(vk) == startTimes.end()) {
+            startTimes[vk] = ks->time;
+        } else {
+            duration = ks->time - startTimes[vk];
+        }
+    } 
+    else if (isKeyUp) {
+        if (startTimes.count(vk)) {
+            duration = ks->time - startTimes[vk];
+            startTimes.erase(vk);
+        }
+    }
+
     if (IsHotkeyBlocked(keyName)) {
         pressedKeys = keyName;
         options.clear();
@@ -429,7 +449,7 @@ LRESULT CALLBACK KeyboardHookCallback(int nCode, WPARAM wParam, LPARAM lParam) {
     
     isBlocked = !pressedKeys.empty();
     
-    PrintKeyInfo(VKCodeToHex(vk), keyName, pressedKeys, (isKeyDown ? "Down" : (isKeyUp ? "Up" : "None")), options, (isBlocked?"Blocked":"No blocked"), (isInjected?"Programm":"Physical"), register_key, currentInfo);
+    PrintKeyInfo(VKCodeToHex(vk), keyName, pressedKeys, (isKeyDown ? "Down" : (isKeyUp ? "Up" : "None")), duration, options, (isBlocked?"Blocked":"No blocked"), (isInjected?"Programm":"Physical"), register_key, currentInfo);
     
     if (isBlocked&&!isInjected) return 1;
     return CallNextHookEx(nullptr, nCode, wParam, lParam);
