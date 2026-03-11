@@ -1,5 +1,5 @@
 
-from numba import prange
+# from numba import prange
 from variable import *
 from plugins.update_grap.variable import *
 import os
@@ -68,7 +68,7 @@ def draw_gradient_line(canvas, x1, y1, x2, y2, color_start, color_end, line_widt
     r1, g1, b1 = hex_to_rgb(color_start)
     r2, g2, b2 = hex_to_rgb(color_end)
 
-    for i in prange(steps):
+    for i in range(steps):
         ratio = i / (steps - 1)
         r = int(r1 + (r2 - r1) * ratio)
         g = int(g1 + (g2 - g1) * ratio)
@@ -115,6 +115,7 @@ d=None
 tit=None
 aw=None
 points=None
+d1=None
 class update_grap:
     def __init__(self, canvas, root, RECT_HEIGHT,w):
          self.canvas=canvas
@@ -122,7 +123,7 @@ class update_grap:
          self.RECT_HEIGHT=RECT_HEIGHT
          self.aw=None
     def graph(self):  
-        global d,points,ac,tit
+        global d,points,ac,tit, d1
         active_points = []
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
 
@@ -131,7 +132,8 @@ class update_grap:
             data = client_socket.recv(int(m))
             
  
-            if d != data:
+            if data != d1:
+                d1=data
                 d=zlib.decompress(data)
                 open_windows = d.decode('utf-8')
                 
@@ -139,8 +141,7 @@ class update_grap:
 
                 scale_left = scale_top = scale_right = scale_bottom = 0
                 rects = [w[3] for w in tit] if tit else []
-                
-                for i in prange(len(rects) - 1, -1, -1):
+                for i in range(len(rects) - 1, -1, -1):
                     normalized_path = os.path.normpath(tit[i][2])
                     if normalized_path in win_rect:
                         scale_left, scale_top, scale_right, scale_bottom = win_rect[normalized_path]
