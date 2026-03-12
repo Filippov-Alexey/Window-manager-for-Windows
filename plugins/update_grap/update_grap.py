@@ -78,38 +78,50 @@ def draw_gradient_line(canvas, x1, y1, x2, y2, color_start, color_end, line_widt
         intermediate_y = int(y1 + (y2 - y1) * (i / steps))
         next_x = int(x1 + (x2 - x1) * ((i + 1) / steps))
         next_y = int(y1 + (y2 - y1) * ((i + 1) / steps))
-        tags = f"win_{x1}_{y1}_{x2}_{y2}"
-        item_id=canvas.create_line(intermediate_x, intermediate_y, next_x, next_y,
+        tags = [f"win_{x1}_{y1}_{x2}_{y2}","icon"]
+        canvas.create_line(intermediate_x, intermediate_y, next_x, next_y,
                         fill=color, width=line_width, tags=tags)
-        canvas.addtag_withtag(["icon",tags], item_id)  # Добавляем тег "icon" для управления
+
 index=-visible_length
 full_string=''
 def update_title(canvas, tit, RECT_HEIGHT):
     global active_title, index, title, full_string
-    if len(tit[0][1])>visible_length:
-        s = tit[0][1][:visible_length*2]+'...'
-    else:
-        s = tit[0][1][:visible_length*2]
+    
+    raw_text = tit[0][1]
+    words = raw_text.split()
+    s = ""
+    for word in words:
+        test_s = (s + " " + word).strip()
+        if len(test_s) <= visible_length:
+            s = test_s
+        else:
+            s += "..."
+            break
+    
+    if not s:
+        s = raw_text[:visible_length-3] + "..."
 
-    if active_title != s or index >= len(full_string):
+    if active_title != s:
         active_title = s
-        index= 0
-        preamble_spaces = ' ' * visible_length
-        full_string = preamble_spaces + s + preamble_spaces
+        index = 0
+        preamble = ' ' * visible_length
+        full_string = preamble + s + preamble
 
-    d = full_string[index % len(full_string):index % len(full_string) + visible_length]
+    d = full_string[index % len(full_string) : index % len(full_string) + visible_length]
 
     while d.isspace():
         index += 1
         d = full_string[index % len(full_string):index % len(full_string) + visible_length]
 
     if title == '':
-        title = canvas.create_text(1000, RECT_HEIGHT // 2, text=d, anchor="e", fill="white", font=("Consolas", 11))
-        canvas.addtag_withtag("icon", title)
+        title = canvas.create_text(1000, RECT_HEIGHT // 2, text=d, 
+                                  anchor="e", fill="white", font=("Consolas", 11), tags="icon")
     else:
         canvas.itemconfigure(title, text=d)
 
     index += 1
+
+
 ac=[]
 d=None
 tit=None
