@@ -6,7 +6,17 @@ from windows_controle import winmove
 import win32api
 import ctypes
 import logger
+import mouse
 log=logger.setup_logging()
+dirtools='tools'
+tools={}
+for root, dirs, files in os.walk(dirtools):
+    if root!='__pycache__':
+        for file in files:
+            if root[6:]==file[:-4] and file.endswith(".exe"):
+                path = os.path.join(root, file)
+                tools[file[:-4]]='.\\'+path
+
 def get_layout_names():
     LOCALE_SLANGUAGE = 0x0002 
     layout_ids = win32api.GetKeyboardLayoutList()
@@ -16,7 +26,7 @@ def get_layout_names():
         buffer = ctypes.create_unicode_buffer(256)
         
         if ctypes.windll.kernel32.GetLocaleInfoW(lang_id, LOCALE_SLANGUAGE, buffer, 256):
-            layouts.append([f"0x{lang_id:04x}",buffer.value])
+            layouts.append([f"0x{(hkl & 0xFFFFFFFFFFFFFFFF):016x}",buffer.value])
     return layouts
 layouts=get_layout_names()
 
@@ -34,9 +44,8 @@ def get_index_layout_list(current_id):
     return current_index
 def get_next_layout_hkl(current_id):
     current_index=get_index_layout_list(current_id)
-    log.info(f'gnlk={current_index}+{type(current_index)}-{len(layouts)}')
-    try:
-        if current_index != -1:
+    try:        
+         if current_index != -1:
             next_index = (current_index + 1) % len(layouts)
             log.warning(layouts[next_index])
             return layouts[next_index]
@@ -75,8 +84,8 @@ win_size={"C:\\Users\\alexey\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.
 winpos={1:{0:[5,35,805,440],1:[805,35,1920,1078],2:[5,443,805,1078]},'max':[5,35,1920,1078]}
 
 ACTIONS = {
-    'pause':             lambda w, i: subprocess.run(['click']),
-    'left_shift+pause':  lambda w, i: subprocess.run(['click']),
+    'pause':             lambda w, i: mouse.click('right'),
+    'left_shift+pause':  lambda w, i: mouse.click('right'),
     'left_win+arrow_right': lambda w, i: winmove('right', w, i),
     'left_win+arrow_left':  lambda w, i: winmove('left', w, i),
     'left_win+arrow_up':    lambda w, i: winmove('up', w, i),
@@ -85,7 +94,6 @@ ACTIONS = {
     'left_win+v':           lambda w, i: subprocess.run(['press', 'left_win+v']),
     'left_win+r':           lambda w, i: subprocess.run(['press', 'left_win+r']),
     'left_win+e':           lambda w, i: subprocess.run(['press', 'left_win+e']),
-    'insert':           lambda w, i: subprocess.run(['press', 'f2']),
     'shift+ctrl+z':lambda w, i: subprocess.run('D:\\winpanbat\\cc\\zn.bat'),
     'shift+ctrl+v':lambda w, i: subprocess.run('D:\\winpanbat\\cc\\vk.bat'),
     'shift+ctrl+o':lambda w, i: subprocess.run('D:\\winpanbat\\cc\\ok.bat'),

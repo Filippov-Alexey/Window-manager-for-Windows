@@ -120,7 +120,7 @@ def main():
         class_name = module.__name__.split('.')[-1]
         root.after(100 * (i + 1), lambda m=module, cn=class_name: getattr(m, cn)(canvas, root, RECT, extension[0]).run())
         k=i
-    root.after(100*(k+1),lambda: subprocess.run(['press','l']))
+    root.after(100*(k+1),lambda: subprocess.run([tools['press'],'packet']))
     root.mainloop()
 if __name__=="__main__":
     main()

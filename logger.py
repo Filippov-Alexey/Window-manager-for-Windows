@@ -10,7 +10,7 @@ def setup_logging():
         "<level>{level}</level> - "
         "<level>{message}</level>"
     )
-    EXCLUDED_FILES = ["run.py","update_status.py"]
+    EXCLUDED_FILES = ["run.py"]
 
     logger.add(sys.stderr, format=custom_format, colorize=True,filter=lambda record: record["file"].name not in EXCLUDED_FILES)
     return logger

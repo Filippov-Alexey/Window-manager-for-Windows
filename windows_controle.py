@@ -7,6 +7,7 @@ import socket
 import json
 import variable
 import logger
+
 log=logger.setup_logging()
 
 stop_event = threading.Event()
@@ -63,8 +64,8 @@ def getindexwin(windows):
                 return index
     return None
 def winmove(directions, w, i):
-    indexwin = getindexwin(w)
-    if indexwin is not None:
+    if w and w.title != variable.TITLE:
+        indexwin = getindexwin(w)
         if directions == 'up':
             w.maximize()
         elif directions == 'down':
@@ -90,7 +91,7 @@ def handle_key_press(out):
 def run_and_check():
     while True:
         process = subprocess.Popen(
-            ["win.exe"],
+            [variable.tools["win"]],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,

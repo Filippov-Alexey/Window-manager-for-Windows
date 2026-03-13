@@ -61,7 +61,7 @@
 
 1. **Клонируйте репозиторий:**
    ```bash
-   git clone [https://github.com](https://github.com/Filippov-Alexey/Window-manager-for-Windows/)
+   git clone https://github.com
    cd Window-manager-for-Windows```
 2. **Установите зависимости:**
 bash```
@@ -73,5 +73,4 @@ python run.py```
 ## Вклад
 
 Если вы хотите внести свой вклад в проект, пожалуйста, создайте pull request или откройте issue.
-
 

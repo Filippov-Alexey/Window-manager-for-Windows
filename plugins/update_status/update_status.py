@@ -57,7 +57,7 @@ def get_gpu_usage_and_temp():
 
 def get_master_volume_waveout():
     try:
-        raw_out = subprocess.check_output(['vol.exe'], text=True)
+        raw_out = subprocess.check_output([tools['vol']], text=True)
         data = json.loads(raw_out)
         
         vol_val = int(float(data['vol']))
@@ -202,7 +202,7 @@ class update_status:
 
                     if 'left_win+space' in op:
                         if status == 'Down':
-                            self.current_hkl = get_next_layout_hkl(key['ID'])[0]
+                            self.current_hkl = get_next_layout_hkl(key['HKL'])[0]
                             self.lay = True
                             self.draw_layouts(self.current_hkl)
 

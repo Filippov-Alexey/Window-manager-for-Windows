@@ -109,7 +109,7 @@ class update_icons:
          self.canvas=canvas
          self.root=root
          self.w=w
-    def run(self):
+    def update_icons(self):
         global at
         def sanitize_filename(title):
             return re.sub(r'[\/:*?"<>|]', '_', title)
@@ -213,6 +213,7 @@ class update_icons:
                     photo_cache.pop(h, None)
             except Exception as e:
                 log.error(f'up_ic-{e}')
-    
+    def run(self):
+        self.update_icons()
         self.root.after(UPDATE_ICON_MS, lambda: self.run())
         

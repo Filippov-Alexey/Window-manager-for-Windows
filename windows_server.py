@@ -89,7 +89,7 @@ def bring_window_to_front(hwnd):
     except Exception as ex:
         log.error('Error bringing window to front:', ex)
 def get_executable_paths_with_open_windows(exe=None):
-    args = ['getwin.exe']
+    args = [tools['getwin']]
     
     if exe:
         args.append(exe)
@@ -131,8 +131,6 @@ class WindowServer:
         current_window = pygetwindow.getActiveWindow()
         if current_window is not None and not current_window in patterns:
 
-                
-            # if current_window is not None:
             self.current_attributes = {
                 'title': current_window.title,
                 'left': current_window.left,

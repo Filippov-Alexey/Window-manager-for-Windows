@@ -23,7 +23,6 @@ def get_layout_string(hkl_hex):
                 chars += buf.value
     return chars
 
-
 class shift:
 
     def __init__(self, canvas, root, w, rect):
@@ -42,7 +41,6 @@ class shift:
     def listen_keyboard(self):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.connect(('localhost', ports['get_key']))
-            log.info("Соединение с клавиатурой установлено")
             try:
                 while True:
                     m = s.recv(4).decode('utf-8', errors='replace')
@@ -54,7 +52,6 @@ class shift:
                 time.sleep(1)
 
     def process_tasks(self):
-        """Отработка тяжелых команд: subprocess и работа с окнами"""
         while True:
             try:
                 msg = self.task_queue.get()
@@ -74,7 +71,6 @@ class shift:
                     else:
                         self.last_shift_time = 0
                 else:
-                    # Логика накопления строки
                     if len(chars) > 0:
                         if chars in [' ', 'return']:
                             self.string = ''
@@ -84,20 +80,18 @@ class shift:
                 log.error(f"Ошибка при обработке задачи: {e}")
 
     def handle_double_shift(self, layout):
-        log.info("Двойной Shift! ")
-        with subprocess.Popen(["buffer.exe"], stdout=subprocess.PIPE, text=True, encoding='utf-8') as proc:
-            subprocess.run(['press.exe', '_ctrl+x'])
+        with subprocess.Popen([tools["buffer"]], stdout=subprocess.PIPE, text=True, encoding='utf-8') as proc:
+            subprocess.run([tools['press'], '_ctrl+x'])
             raw_output = proc.stdout.read().strip('\x00')
-        
         if not raw_output:
             raw_output = self.string
             for _ in self.string:
-                subprocess.run(['press.exe', 'backspace'])
+                subprocess.run([tools['press'], 'backspace'])
         buf = raw_output[:-1].replace('\n', '\xf9').replace('    ', '\xf8').rstrip('\n')
         eng_chars = get_layout_string(layout.get('HKL'))
-        rus_chars = get_layout_string(get_next_layout_hkl(layout.get('ID')))
+        rus_chars = get_layout_string(get_next_layout_hkl(layout.get('HKL'))[0])
         text = buf.translate(str.maketrans(eng_chars, rus_chars))
-        subprocess.run(['write.exe', text])
+        subprocess.run([tools['write'], text])
 
     def run(self):
         self.root.after(100, self.run)

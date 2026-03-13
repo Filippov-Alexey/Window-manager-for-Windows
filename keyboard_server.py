@@ -1,5 +1,5 @@
 import re
-from variable import ports
+from variable import ports, tools
 import socket
 import json
 import subprocess
@@ -67,7 +67,7 @@ def parse_broken_layout(raw_string):
 
 def run_mouse_and_read_output():
     process = subprocess.Popen(
-        ["cmd.exe","/c","blocking.exe",'alt+arrow_left', 'pause', 'left_win', 'left_shift+pause', 'insert'],
+        ["cmd.exe","/c",tools["blocking"],'alt+arrow_left', 'pause', 'left_win', 'left_shift+pause', 'insert'],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,

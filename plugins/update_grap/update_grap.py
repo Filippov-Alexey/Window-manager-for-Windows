@@ -98,7 +98,9 @@ def update_title(canvas, tit, RECT_HEIGHT):
             s += "..."
             break
     
-    if not s:
+    if len(s)<visible_length:
+        s = raw_text[:visible_length-3]
+    else:
         s = raw_text[:visible_length-3] + "..."
 
     if active_title != s:
