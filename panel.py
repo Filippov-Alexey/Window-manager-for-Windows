@@ -89,25 +89,50 @@ def handle_client(conn, addr, root):
     finally:
         clients.remove(conn)
 
-def main():
-    # Создаем главное окно
-    root = Tk()
-    root.title(TITLE)
-    root.attributes('-fullscreen', True)  # Полноэкранный режим
-    root.resizable(False, False)  # Отключаем изменение размера окна
-    root.overrideredirect(True)
-    root.wm_attributes('-topmost', True)  # Сделать окно поверх других
-    root.wm_overrideredirect(True)  # Скрыть заголовок окна
-    root.wm_attributes("-transparentcolor", "#45765a")  # Прозрачный цвет
+def set_taskbar_visible(visible=True):
+    cmd = 5 if visible else 0  # 5 - показать (SW_SHOW), 0 - скрыть (SW_HIDE)
+    
+    # 1. Основная панель задач
+    h_tray = windll.user32.FindWindowA(b'Shell_TrayWnd', None)
+    if h_tray:
+        windll.user32.ShowWindow(h_tray, cmd)
 
-    # Создание канваса
-    canvas = Canvas(root, width=w, height=h, bg='#45765a', highlightthickness=0)
+    # 2. Дополнительные панели задач (на других мониторах)
+    # Ищем все окна с классом 'Shell_SecondaryTrayWnd'
+    h_secondary = windll.user32.FindWindowExA(0, 0, b'Shell_SecondaryTrayWnd', None)
+    while h_secondary:
+        windll.user32.ShowWindow(h_secondary, cmd)
+        # Ищем следующую вторичную панель, если мониторов больше двух
+        h_secondary = windll.user32.FindWindowExA(0, h_secondary, b'Shell_SecondaryTrayWnd', None)
+
+def main():
+
+    root = Tk()
+
+    # 1. Считаем общие габариты всех мониторов
+    monitors = get_monitors()
+    min_x = min(m.x for m in monitors)
+    min_y = min(m.y for m in monitors)
+    max_x = max(m.x + m.width for m in monitors)
+    max_y = max(m.y + m.height for m in monitors)
+
+    full_width = max_x - min_x
+    full_height = max_y - min_y
+
+    # 2. Настраиваем окно
+    # Формат geometry: "ШиринаxВысота+СмещениеX+СмещениеY"
+    root.geometry(f"{full_width}x{full_height}+{min_x}+{min_y}")
+
+    root.overrideredirect(True)
+    root.attributes('-topmost', True)
+    root.attributes("-transparentcolor", "#45765a")
+
+    # 3. Создаем канвас на всю площадь
+    canvas = Canvas(root, width=full_width, height=full_height, bg='#45765a', highlightthickness=0)
     canvas.pack()
 
-    # Скрываем панель задач
-    h_tray = windll.user32.FindWindowA(b'Shell_TrayWnd', None)
-    windll.user32.ShowWindow(h_tray, 0)
-
+    # Скрыть всё
+    set_taskbar_visible(False)
     color="#220294" 
     bar=canvas.create_rectangle(0, 0, 400, RECT, fill=color, outline='')
     canvas.addtag_withtag("icon", bar)
