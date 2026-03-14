@@ -87,41 +87,38 @@ full_string=''
 def update_title(canvas, tit, RECT_HEIGHT):
     global active_title, index, title, full_string
     
-    raw_text = tit[0][1]
-    words = raw_text.split()
-    s = ""
-    for word in words:
-        test_s = (s + " " + word).strip()
-        if len(test_s) <= visible_length:
-            s = test_s
-        else:
-            s += "..."
-            break
+    raw_text = " ".join(tit[0][1].split()) 
     
-    if len(s)<visible_length:
-        s = raw_text[:visible_length-3]
+    if len(raw_text) <= visible_length:
+        s = raw_text
     else:
-        s = raw_text[:visible_length-3] + "..."
+        s = raw_text[:visible_length - 3]
+        last_space = s.rfind(" ")
+        if last_space != -1:
+            s = s[:last_space]
+        s += "..."
 
     if active_title != s:
         active_title = s
         index = 0
+
         preamble = ' ' * visible_length
         full_string = preamble + s + preamble
 
-    d = full_string[index % len(full_string) : index % len(full_string) + visible_length]
+    pos = index % len(full_string)
+    d = (full_string + full_string)[pos : pos + visible_length]
 
     while d.isspace():
         index += 1
         d = full_string[index % len(full_string):index % len(full_string) + visible_length]
 
-    if title == '':
+    if not title:
         title = canvas.create_text(1000, RECT_HEIGHT // 2, text=d, 
                                   anchor="e", fill="white", font=("Consolas", 11), tags="icon")
     else:
         canvas.itemconfigure(title, text=d)
-
     index += 1
+
 
 
 ac=[]
