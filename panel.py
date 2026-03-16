@@ -6,6 +6,8 @@ import importlib.util
 import time
 import subprocess
 import logger
+import socket
+import threading
 log=logger.setup_logging()
 log.info('run')
 def load_plugins():
@@ -105,9 +107,73 @@ def set_taskbar_visible(visible=True):
         # Ищем следующую вторичную панель, если мониторов больше двух
         h_secondary = windll.user32.FindWindowExA(0, h_secondary, b'Shell_SecondaryTrayWnd', None)
 
+
+# Создаем сокет заранее (вне функции, чтобы не плодить подключения)
+import queue
+data_queue = queue.Queue()
+
+class State:
+    last_tk_tick = time.time()
+
+state = State()
+
+def run_server():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
+        server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server_socket.bind(('127.0.0.1', 65438))
+        server_socket.listen(5)
+        time.sleep(5)
+        while True:
+            time.sleep(0.7)
+            # 1. Проверяем, не «протух» ли GUI (допустим, задержка > 1 сек)
+            if time.time() - state.last_tk_tick > 1.0:
+                try:
+                    conn, addr = server_socket.accept()
+                    with conn:
+                        
+                        # Логика отправки
+                        message = 'err\n'
+                        payload = message.encode('utf-8')
+                        conn.sendall(f'{len(payload)}\n'.encode())
+                        conn.sendall(payload)
+                except Exception as e:
+                    log.error(f"Ошибка: {e}")
+            else:            
+                try:
+                    conn, addr = server_socket.accept()
+                    with conn:
+                        
+                        # Логика отправки
+                        if not data_queue.empty():
+                            msg = data_queue.get_nowait()
+                            payload = msg.encode('utf-8')
+                            conn.sendall(f'{len(payload)}\n'.encode())
+                            conn.sendall(payload)
+                        # Ваша логика отправки...
+                except socket.timeout:
+                    # Если никто не подключился, просто идем на следующий круг While
+                    continue 
+                except Exception as e:
+                    log.error(f"Ошибка: {e}")
+
+def update(canvas):
+    try:
+        # Обновляем метку времени — "я жив"
+        state.last_tk_tick = time.time()
+        
+        data_queue.put('ok\n')
+        
+        canvas.after(100, lambda: update(canvas))
+    except Exception as e:
+        log.error(f'err-{e}')
+
+threading.Thread(target=run_server, daemon=True).start()
+
 def main():
 
     root = Tk()
+    # root.title("pop")
+    root.title(TITLE)
 
     # 1. Считаем общие габариты всех мониторов
     monitors = get_monitors()
@@ -146,6 +212,7 @@ def main():
         root.after(100 * (i + 1), lambda m=module, cn=class_name: getattr(m, cn)(canvas, root, RECT, extension[0]).run())
         k=i
     root.after(100*(k+1),lambda: subprocess.run([tools['press'],'packet']))
+    root.after(100*(k+2),lambda: update(canvas))
     root.mainloop()
 if __name__=="__main__":
     main()
