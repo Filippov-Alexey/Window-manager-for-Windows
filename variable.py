@@ -91,6 +91,7 @@ ACTIONS = {
     'left_win+arrow_up':    lambda w, i: winmove('up', w, i),
     'left_win+arrow_down':  lambda w, i: winmove('down', w, i),
     'left_win+delete':      lambda w, i: w.close(),
+    'left_win+p':           lambda w, i: subprocess.run(['press', 'left_win+p']),
     'left_win+v':           lambda w, i: subprocess.run(['press', 'left_win+v']),
     'left_win+r':           lambda w, i: subprocess.run(['press', 'left_win+r']),
     'left_win+e':           lambda w, i: subprocess.run(['press', 'left_win+e']),
@@ -106,4 +107,4 @@ ACTIONS = {
 }
 
 new_win_open_max=True
-ports={'get_key':65431,'get_win':65432,'is_full_win':65433}
+ports={'get_key':65431,'get_win':65432,'is_full_win':65433,'get_display':65434}

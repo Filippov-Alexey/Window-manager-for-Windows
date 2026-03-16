@@ -1,14 +1,24 @@
+import threading
 import time
 import subprocess
 import sys
 import os
+import socket
 import winreg
 import ctypes
 import logger
+from variable import *
 log=logger.setup_logging()
 log.info('run')
 ORIGINAL_STICKY_FLAGS = None
-MAIN_SCRIPTS = ["windows_server.py", "windows_controle.py", "keyboard_server.py", "keyboard_manager.py", "windows_is_full_server.py", "panel.py"]
+MAIN_SCRIPTS = ["windows_server.py", 
+                "display_server.py",
+                "windows_controle.py", 
+                "keyboard_server.py", 
+                "keyboard_manager.py", 
+                "windows_is_full_server.py", 
+                "panel.py"
+                ]
 venv_path = 'venv'
 python_path = os.path.join(venv_path, 'Scripts', 'python.exe')
 p = {}
@@ -54,7 +64,7 @@ def stop_all_scripts():
         if process.poll() is None:
             process.terminate()
             try:
-                process.wait(timeout=2)
+                process.wait(timeout=0)
             except:
                 process.kill()
         hb = get_hb_path(script)
@@ -99,10 +109,35 @@ def terminate_everything():
     """Полная очистка при выходе"""
     log.info("\nЗавершение работы монитора...")
     stop_all_scripts()
-    subprocess.run('taskkill /im blocking.exe /f'.split(), capture_output=True)
     manage_sticky_keys(disable=False)
+    subprocess.run('taskkill /im blocking.exe /f'.split(), capture_output=True)
     subprocess.run('taskkill /im win.exe /f'.split(), capture_output=True)
+    subprocess.run('taskkill /im display.exe /f'.split(), capture_output=True)
     # restart_explorer()
+clients = []
+
+def handle_client(conn, addr):
+    """Обработчик для каждого клиента."""
+    clients.append(conn)
+    try:
+        while True:
+            time.sleep(1)
+    except (ConnectionResetError, BrokenPipeError):
+        log.error(f"Connection lost with {addr}.")
+    except Exception as e:
+        log.error(f"Error with client {addr}: {e}")
+    finally:
+        clients.remove(conn)
+        log.error(f"Connection with {addr} closed.")
+def send_updates(message):
+    if clients and message:
+        for conn in list(clients):
+            try:
+                conn.sendall(f'{len(message.encode('utf-8'))}\n'.encode())
+                conn.sendall(message.encode('utf-8'))
+            except Exception as e:
+                clients.remove(conn)
+                log.error(f"KS_Could not send message to client: {e}")
 
 # --- Инициализация ---
 manage_sticky_keys(disable=True)
@@ -111,9 +146,79 @@ for f in get_variable_files():
     watched_files[f] = os.path.getmtime(f)
 
 start_all_scripts()
+log.info('strt')
 
+
+def recv_fixed(sock, n):
+    """Вспомогательная функция: читает ровно n байт"""
+    data = b''
+    while len(data) < n:
+        packet = sock.recv(n - len(data))
+        if not packet: return None
+        data += packet
+    return data
+
+def safe_recv(sock):
+    # 1. Читаем заголовок до переноса строки (как отправляет сервер)
+    header = b''
+    while not header.endswith(b'\n'):
+        char = sock.recv(1)
+        if not char: return None
+        header += char
+    
+    # 2. Извлекаем длину и читаем ровно столько байт payload
+    length = int(header.decode().strip())
+    payload = recv_fixed(sock, length)
+    return payload.decode('utf-8', errors='replace')
+
+
+def restart_panel():
+    """Общая функция для перезапуска panel.py"""
+    for script in MAIN_SCRIPTS:
+        if script == 'panel.py':
+            process = p.get(script)
+            if process:
+                log.warning('Restarting panel.py...')
+                process.kill()
+            break
+
+def status_worker():
+    while True:
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(5) # Чтобы поток не завис навечно
+                s.connect(('127.0.0.1', 65438))
+                data=safe_recv(s)
+                if data == 'err\n':
+                    restart_panel()
+        except Exception as e:
+            log.error(f"Status port error: {e}")
+        time.sleep(2) # Пауза между попытками подключения
+
+def display_worker():
+    while True:
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.connect(('localhost', ports['get_display']))
+                s.settimeout(None) # Убираем таймаут, ждем данных столько, сколько нужно
+                
+                while True: # Внутренний цикл: читаем сообщения из одного соединения
+                    data = safe_recv(s) # Используйте функцию из предыдущего ответа
+                    if data is None: break # Сервер разорвал соединение
+                    
+                    log.info(f"Display event: {data}")
+                    restart_panel() # ВНИМАНИЕ: если вызывать это тут, 
+                                     # панель будет рестартить на каждое движение!
+        except Exception as e:
+            log.error(f"Display connection error: {e}")
+            time.sleep(2) # Пауза перед переподключением при ошибке
+
+# Запускаем фоновые потоки
+threading.Thread(target=status_worker, daemon=True).start()
+threading.Thread(target=display_worker, daemon=True).start()
 try:
     while True:
+
         if check_for_config_changes():
             log.info("Конфигурация изменена. Перезапуск всех систем...")
             stop_all_scripts()

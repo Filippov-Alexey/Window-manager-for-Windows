@@ -125,9 +125,9 @@ class update_icons:
   
                 open_windows = zlib.decompress(data).decode('utf-8')
                 open_windows=json.loads(open_windows)
-                client_socket.close()
             except Exception as e:
                 log.error(f"UI An error occurred: {e}")
+            client_socket.close()
 
             current_files = set()
             visible_hwnds = []

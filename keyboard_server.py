@@ -9,8 +9,8 @@ from threading import Thread, Event
 import logger
 log=logger.setup_logging()
 
-clients = []
 stop_event = Event()
+clients = []
 
 def handle_client(conn, addr):
     """Обработчик для каждого клиента."""

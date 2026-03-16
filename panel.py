@@ -6,6 +6,8 @@ import importlib.util
 import time
 import subprocess
 import logger
+import socket
+import threading
 log=logger.setup_logging()
 log.info('run')
 def load_plugins():
@@ -89,25 +91,114 @@ def handle_client(conn, addr, root):
     finally:
         clients.remove(conn)
 
-def main():
-    # Создаем главное окно
-    root = Tk()
-    root.title(TITLE)
-    root.attributes('-fullscreen', True)  # Полноэкранный режим
-    root.resizable(False, False)  # Отключаем изменение размера окна
-    root.overrideredirect(True)
-    root.wm_attributes('-topmost', True)  # Сделать окно поверх других
-    root.wm_overrideredirect(True)  # Скрыть заголовок окна
-    root.wm_attributes("-transparentcolor", "#45765a")  # Прозрачный цвет
+def set_taskbar_visible(visible=True):
+    cmd = 5 if visible else 0  # 5 - показать (SW_SHOW), 0 - скрыть (SW_HIDE)
+    
+    # 1. Основная панель задач
+    h_tray = windll.user32.FindWindowA(b'Shell_TrayWnd', None)
+    if h_tray:
+        windll.user32.ShowWindow(h_tray, cmd)
 
-    # Создание канваса
-    canvas = Canvas(root, width=w, height=h, bg='#45765a', highlightthickness=0)
+    # 2. Дополнительные панели задач (на других мониторах)
+    # Ищем все окна с классом 'Shell_SecondaryTrayWnd'
+    h_secondary = windll.user32.FindWindowExA(0, 0, b'Shell_SecondaryTrayWnd', None)
+    while h_secondary:
+        windll.user32.ShowWindow(h_secondary, cmd)
+        # Ищем следующую вторичную панель, если мониторов больше двух
+        h_secondary = windll.user32.FindWindowExA(0, h_secondary, b'Shell_SecondaryTrayWnd', None)
+
+
+# Создаем сокет заранее (вне функции, чтобы не плодить подключения)
+import queue
+data_queue = queue.Queue()
+
+class State:
+    last_tk_tick = time.time()
+
+state = State()
+
+def run_server():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
+        server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server_socket.bind(('127.0.0.1', 65438))
+        server_socket.listen(5)
+        time.sleep(5)
+        while True:
+            time.sleep(0.7)
+            # 1. Проверяем, не «протух» ли GUI (допустим, задержка > 1 сек)
+            if time.time() - state.last_tk_tick > 1.0:
+                try:
+                    conn, addr = server_socket.accept()
+                    with conn:
+                        
+                        # Логика отправки
+                        message = 'err\n'
+                        payload = message.encode('utf-8')
+                        conn.sendall(f'{len(payload)}\n'.encode())
+                        conn.sendall(payload)
+                except Exception as e:
+                    log.error(f"Ошибка: {e}")
+            else:            
+                try:
+                    conn, addr = server_socket.accept()
+                    with conn:
+                        
+                        # Логика отправки
+                        if not data_queue.empty():
+                            msg = data_queue.get_nowait()
+                            payload = msg.encode('utf-8')
+                            conn.sendall(f'{len(payload)}\n'.encode())
+                            conn.sendall(payload)
+                        # Ваша логика отправки...
+                except socket.timeout:
+                    # Если никто не подключился, просто идем на следующий круг While
+                    continue 
+                except Exception as e:
+                    log.error(f"Ошибка: {e}")
+
+def update(canvas):
+    try:
+        # Обновляем метку времени — "я жив"
+        state.last_tk_tick = time.time()
+        
+        data_queue.put('ok\n')
+        
+        canvas.after(100, lambda: update(canvas))
+    except Exception as e:
+        log.error(f'err-{e}')
+
+threading.Thread(target=run_server, daemon=True).start()
+
+def main():
+
+    root = Tk()
+    # root.title("pop")
+    root.title(TITLE)
+
+    # 1. Считаем общие габариты всех мониторов
+    monitors = get_monitors()
+    min_x = min(m.x for m in monitors)
+    min_y = min(m.y for m in monitors)
+    max_x = max(m.x + m.width for m in monitors)
+    max_y = max(m.y + m.height for m in monitors)
+
+    full_width = max_x - min_x
+    full_height = max_y - min_y
+
+    # 2. Настраиваем окно
+    # Формат geometry: "ШиринаxВысота+СмещениеX+СмещениеY"
+    root.geometry(f"{full_width}x{full_height}+{min_x}+{min_y}")
+
+    root.overrideredirect(True)
+    root.attributes('-topmost', True)
+    root.attributes("-transparentcolor", "#45765a")
+
+    # 3. Создаем канвас на всю площадь
+    canvas = Canvas(root, width=full_width, height=full_height, bg='#45765a', highlightthickness=0)
     canvas.pack()
 
-    # Скрываем панель задач
-    h_tray = windll.user32.FindWindowA(b'Shell_TrayWnd', None)
-    windll.user32.ShowWindow(h_tray, 0)
-
+    # Скрыть всё
+    set_taskbar_visible(False)
     color="#220294" 
     bar=canvas.create_rectangle(0, 0, 400, RECT, fill=color, outline='')
     canvas.addtag_withtag("icon", bar)
@@ -121,6 +212,7 @@ def main():
         root.after(100 * (i + 1), lambda m=module, cn=class_name: getattr(m, cn)(canvas, root, RECT, extension[0]).run())
         k=i
     root.after(100*(k+1),lambda: subprocess.run([tools['press'],'packet']))
+    root.after(100*(k+2),lambda: update(canvas))
     root.mainloop()
 if __name__=="__main__":
     main()

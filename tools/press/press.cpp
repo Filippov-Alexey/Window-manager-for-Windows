@@ -1,4 +1,28 @@
+
+#include <iostream>
+#include <fstream>
+#include <string>
+#include <filesystem>
+#include <algorithm>
+
+#ifdef _WIN32
 #include <windows.h>
+#else
+#include <unistd.h>
+#include <limits.h>
+#endif
+
+namespace fs = std::filesystem;
+
+// Функция для получения пути к папке, где лежит EXE
+fs::path GetExecutableDir() {
+#ifdef _WIN32
+    wchar_t path[MAX_PATH];
+    GetModuleFileNameW(NULL, path, MAX_PATH);
+    return fs::path(path).parent_path();
+    #endif
+}    
+
 #include <iostream>
 #include <string>
 #include <vector>
@@ -30,9 +54,10 @@ void PressKeyCombination(const std::vector<int>& keyCodes) {
 }
 
 void LoadKeyCodes(const std::string& fileName) {
-        std::ifstream file(fileName);
+        fs::path fullPath = GetExecutableDir() / fileName;
+        std::ifstream file(fullPath);
         if (!file.is_open()) {
-            std::cerr << "Could not open the file: " << fileName << std::endl;
+            std::cerr << "Could not open the file: " << fullPath << std::endl;
             return;
         }
 

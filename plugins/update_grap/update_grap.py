@@ -1,5 +1,4 @@
-
-# from numba import prange
+from numba import prange
 from variable import *
 from plugins.update_grap.variable import *
 import os
@@ -87,41 +86,38 @@ full_string=''
 def update_title(canvas, tit, RECT_HEIGHT):
     global active_title, index, title, full_string
     
-    raw_text = tit[0][1]
-    words = raw_text.split()
-    s = ""
-    for word in words:
-        test_s = (s + " " + word).strip()
-        if len(test_s) <= visible_length:
-            s = test_s
-        else:
-            s += "..."
-            break
+    raw_text = " ".join(tit[0][1].split()) 
     
-    if len(s)<visible_length:
-        s = raw_text[:visible_length-3]
+    if len(raw_text) <= visible_length:
+        s = raw_text
     else:
-        s = raw_text[:visible_length-3] + "..."
+        s = raw_text[:visible_length - 3]
+        last_space = s.rfind(" ")
+        if last_space != -1:
+            s = s[:last_space]
+        s += "..."
 
     if active_title != s:
         active_title = s
         index = 0
+
         preamble = ' ' * visible_length
         full_string = preamble + s + preamble
 
-    d = full_string[index % len(full_string) : index % len(full_string) + visible_length]
+    pos = index % len(full_string)
+    d = (full_string + full_string)[pos : pos + visible_length]
 
     while d.isspace():
         index += 1
         d = full_string[index % len(full_string):index % len(full_string) + visible_length]
 
-    if title == '':
+    if not title:
         title = canvas.create_text(1000, RECT_HEIGHT // 2, text=d, 
                                   anchor="e", fill="white", font=("Consolas", 11), tags="icon")
     else:
         canvas.itemconfigure(title, text=d)
-
     index += 1
+
 
 
 ac=[]
@@ -146,61 +142,60 @@ class update_grap:
             data = client_socket.recv(int(m))
             
  
-            if data != d1:
-                d1=data
-                d=zlib.decompress(data)
-                open_windows = d.decode('utf-8')
-                
-                tit = json.loads(open_windows)
+        if data != d1:
+            d1=data
+            d=zlib.decompress(data)
+            open_windows = d.decode('utf-8')
+            
+            tit = json.loads(open_windows)
 
-                scale_left = scale_top = scale_right = scale_bottom = 0
-                rects = [w[3] for w in tit] if tit else []
-                for i in range(len(rects) - 1, -1, -1):
-                    normalized_path = os.path.normpath(tit[i][2])
-                    if normalized_path in win_rect:
-                        scale_left, scale_top, scale_right, scale_bottom = win_rect[normalized_path]
-                        
-                    rect = rects[i]
-                    left, top, right, bottom = rect
+            scale_left = scale_top = scale_right = scale_bottom = 0
+            rects = [w[3] for w in tit] if tit else []
+            for i in prange(len(rects) - 1, -1, -1):
+                normalized_path = os.path.normpath(tit[i][2])
+                if normalized_path in win_rect:
+                    scale_left, scale_top, scale_right, scale_bottom = win_rect[normalized_path]
+                    
+                rect = rects[i]
+                left, top, right, bottom = rect
 
-                    new_left = left + (right - left) + scale_left
-                    new_top = top + (bottom - top) + scale_top
-                    new_right = right - (right - left) - scale_right
-                    new_bottom = bottom - (bottom - top) - scale_bottom
+                new_left = left + (right - left) + scale_left
+                new_top = top + (bottom - top) + scale_top
+                new_right = right - (right - left) - scale_right
+                new_bottom = bottom - (bottom - top) - scale_bottom
 
-                    higher = rects[:i]
-                    segs = visible_border_segments((new_left, new_top, new_right, new_bottom), higher)
+                higher = rects[:i]
+                segs = visible_border_segments((new_left, new_top, new_right, new_bottom), higher)
 
-                    for s in segs:
-                        x1, y1, x2, y2 = s
-                        active_points.append((x1, y1, x2, y2))
-                        
-                        if (x1, y1, x2, y2) not in points:  
-                            points.append((x1, y1, x2, y2))
-                        if orientation:
-                            is_gradient = (x1 == x2)
-                            color_start = colorUP if (is_gradient or y1 == new_top) else colorDOWN
-                            color_end = colorDOWN if (is_gradient or y1 != new_top) else colorUP
-                        else:
-                            is_gradient = (y1 == y2)
-                            color_start = colorUP if (is_gradient or x1 == new_left) else colorDOWN
-                            color_end = colorDOWN if (is_gradient or x1 != new_left) else colorUP
+                for s in segs:
+                    x1, y1, x2, y2 = s
+                    active_points.append((x1, y1, x2, y2))
+                    
+                    if (x1, y1, x2, y2) not in points:  
+                        points.append((x1, y1, x2, y2))
+                    if orientation:
+                        is_gradient = (x1 == x2)
+                        color_start = colorUP if (is_gradient or y1 == new_top) else colorDOWN
+                        color_end = colorDOWN if (is_gradient or y1 != new_top) else colorUP
+                    else:
+                        is_gradient = (y1 == y2)
+                        color_start = colorUP if (is_gradient or x1 == new_left) else colorDOWN
+                        color_end = colorDOWN if (is_gradient or x1 != new_left) else colorUP
 
-                        draw_gradient_line(self.canvas, x1, y1, x2, y2, color_start, color_end, line_width=5)
+                    draw_gradient_line(self.canvas, x1, y1, x2, y2, color_start, color_end, line_width=5)
 
-                a = list(set(points) - set(active_points))
-                if ac!=a:
-                    ac=a
-                    remove = []
-                    for item in points:
-                        if item in a:
-                            x1, y1, x2, y2 = item
-                            tag = f"win_{x1}_{y1}_{x2}_{y2}"
-                            self.canvas.delete(tag)
-                            remove.append(item)
+            a = list(set(points) - set(active_points))
+            if ac!=a:
+                ac=a
+                remove = []
+                for item in points:
+                    if item in a:
+                        x1, y1, x2, y2 = item
+                        tag = f"win_{x1}_{y1}_{x2}_{y2}"
+                        self.canvas.delete(tag)
+                        remove.append(item)
 
-                    points = [item for item in points if item not in remove]
-
+                points = [item for item in points if item not in remove]
     def run(self):
         global points,aw
         points = points or []

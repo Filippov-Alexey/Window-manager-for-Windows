@@ -82,12 +82,10 @@ def handle_key_press(out):
     valu = {key for item in items for key in item.split(', ')}
     
     w = pygetwindow.getActiveWindow()
-    log.info(out)
+    # log.info(out)
     
     # if w and w.title != TITLE:
     if out.get('numpan')=='NumPad' and out.get('blocked')=='Blocked':
-        log.info(out.get('key_name'))
-        log.info(out.get('duretion'))
         handle_numpad_mouse(out)
     elif out.get('status') == 'Up':
         for value in valu:

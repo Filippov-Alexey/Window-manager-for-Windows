@@ -61,7 +61,7 @@
 
 1. **Клонируйте репозиторий:**
    ```bash
-   git clone https://github.com/Filippov-Alexey/Window-manager-for-Windows
+   git clone https://github.com
    cd Window-manager-for-Windows```
 2. **Установите зависимости:**
 bash```

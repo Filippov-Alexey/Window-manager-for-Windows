@@ -5,7 +5,6 @@ import subprocess
 import win32com.client
 from PIL import Image, ImageTk
 from pathlib import Path
-import socket
 import logger
 log=logger.setup_logging()
 
@@ -64,15 +63,17 @@ class shortcut_panel:
          self.shortcuts=SHORTCUTS_DIR
     def shortcut_panel(self):
         global full_screen_prev, paused_for_fullscreen
+        fs=0
 
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
+            client_socket.settimeout(0.5)
             try:
                 client_socket.connect(('localhost', ports['is_full_win']))
                 fs = int(client_socket.recv(4).decode('utf-8', errors='replace'))
 
             except Exception as e:
                 log.error(f"short An error occurred while connecting to the server: {e}")
-                return
+                # return
 
         # Проверяем состояние полноэкранного режима
         if fs == 1:
@@ -83,7 +84,7 @@ class shortcut_panel:
                 # Скрываем все иконки
                 self.canvas.itemconfigure("icon", state='hidden')  # Скрываем элементы с тегом "icon"
                 self.root.after(UPDATE_GRAPMS, lambda: self.run)
-                return
+                # return
         else:
             if full_screen_prev:
                 # Если мы выходим из полноэкранного режима

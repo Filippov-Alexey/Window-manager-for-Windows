@@ -245,7 +245,3 @@ class update_status:
     def run(self):
         self.update_status()
         self.root.after(UPDATE_STATUS_MS, lambda: self.run())
-if __name__=='__main__':
-    from panel import main
-    main()
- 

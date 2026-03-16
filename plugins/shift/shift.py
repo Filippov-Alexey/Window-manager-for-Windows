@@ -92,6 +92,5 @@ class shift:
         rus_chars = get_layout_string(get_next_layout_hkl(layout.get('HKL'))[0])
         text = buf.translate(str.maketrans(eng_chars, rus_chars))
         subprocess.run([tools['write'], text])
-
     def run(self):
         self.root.after(100, self.run)
