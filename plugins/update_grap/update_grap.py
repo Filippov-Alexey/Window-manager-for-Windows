@@ -86,38 +86,36 @@ full_string=''
 def update_title(canvas, tit, RECT_HEIGHT):
     global active_title, index, title, full_string
     
-    raw_text = " ".join(tit[0][1].split()) 
-    
-    if len(raw_text) <= visible_length:
-        s = raw_text
+    raw_text = tit[0][1]
+    # raw_text = " ".join(tit.split())
+    if len(raw_text) > visible_length:
+        s = raw_text[:visible_length - 3].rsplit(' ', 1)[0] + "..."
     else:
-        s = raw_text[:visible_length - 3]
-        last_space = s.rfind(" ")
-        if last_space != -1:
-            s = s[:last_space]
-        s += "..."
+        s = raw_text
 
     if active_title != s:
         active_title = s
         index = 0
-
-        preamble = ' ' * visible_length
-        full_string = preamble + s + preamble
+        padding = " " * visible_length
+        full_string = padding + s + "   " 
+    current_pos = index % len(full_string)
+    tail = full_string[current_pos:] + full_string[:current_pos]
+    
+    spaces_before_text = len(tail) - len(tail.lstrip(' '))
+    
+    if spaces_before_text >= visible_length:
+        index += (spaces_before_text - (visible_length - 1))
 
     pos = index % len(full_string)
-    d = (full_string + full_string)[pos : pos + visible_length]
-
-    while d.isspace():
-        index += 1
-        d = full_string[index % len(full_string):index % len(full_string) + visible_length]
+    d = (full_string * 2)[pos : pos + visible_length]
 
     if not title:
         title = canvas.create_text(1000, RECT_HEIGHT // 2, text=d, 
                                   anchor="e", fill="white", font=("Consolas", 11), tags="icon")
     else:
         canvas.itemconfigure(title, text=d)
+        
     index += 1
-
 
 
 ac=[]

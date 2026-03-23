@@ -10,6 +10,7 @@ import socket
 import threading
 log=logger.setup_logging()
 log.info('run')
+log.info(os.getpid())
 def load_plugins():
     plugins = []
     for root, dirs, files in os.walk(plugins_dir):
