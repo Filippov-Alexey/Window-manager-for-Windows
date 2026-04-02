@@ -45,8 +45,9 @@ def send_updates(message):
     if clients and message:
         for conn in list(clients):
             try:
-                conn.sendall(f'{len(message.encode('utf-8'))}\n'.encode())
+                conn.sendall(len(message.encode('utf-8')).to_bytes(4, 'big'))
                 conn.sendall(message.encode('utf-8'))
+                # log.info(message)
             except Exception as e:
                 clients.remove(conn)
                 log.error(f"KS_Could not send message to client: {e}")

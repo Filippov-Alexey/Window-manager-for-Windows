@@ -55,15 +55,16 @@ def draw_rounded_rectangle(canvas, x1, y1, x2, y2, radius, **kwargs):
 
     arc4_id = canvas.create_arc(x1, y2 - arc, x1 + arc, y2, start=180, extent=90, style='pieslice', **kwargs)
     canvas.addtag_withtag("icon", arc4_id)
+x=1000
 def status(canvas,height,color):
-    draw_rounded_rectangle(canvas, 1192,0,1243,height,5,fill=color)
-    draw_rounded_rectangle(canvas, 1250,0,1315,height,5,fill=color)
-    draw_rounded_rectangle(canvas, 1320,0,1405,height,5,fill=color)
-    draw_rounded_rectangle(canvas, 1412,0,1490,height,5,fill=color)
-    draw_rounded_rectangle(canvas, 1503,0,1652,height,5,fill=color)
-    draw_rounded_rectangle(canvas, 1658,0,1725,height,5,fill=color)
-    draw_rounded_rectangle(canvas, 1735,0,1770,height,5,fill=color)
-    draw_rounded_rectangle(canvas, 1780,0,1915,height,5,fill=color)
+    draw_rounded_rectangle(canvas, x+225,0,x+280,height,5,fill=color)
+    draw_rounded_rectangle(canvas, x+285,0,x+350,height,5,fill=color)
+    draw_rounded_rectangle(canvas, x+360,0,x+443,height,5,fill=color)
+    draw_rounded_rectangle(canvas, x+447,0,x+535,height,5,fill=color)
+    draw_rounded_rectangle(canvas, x+540,0,x+650,height,5,fill=color)
+    draw_rounded_rectangle(canvas, x+658,0,x+730,height,5,fill=color)
+    draw_rounded_rectangle(canvas, x+735,0,x+770,height,5,fill=color)
+    draw_rounded_rectangle(canvas, x+780,0,x+915,height,5,fill=color)
 def shortcut(canvas,height,color):
     draw_rounded_rectangle(canvas, 1115,0,1160,height,5,fill=color)
     draw_rounded_rectangle(canvas, 1040,0,1100,height,5,fill=color)
@@ -164,7 +165,7 @@ def update(canvas):
         
         data_queue.put('ok\n')
         
-        canvas.after(100, lambda: update(canvas))
+        canvas.after(500, lambda: update(canvas))
     except Exception as e:
         log.error(f'err-{e}')
 

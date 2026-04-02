@@ -5,95 +5,67 @@
 
 #pragma comment(lib, "Ole32.lib")
 
-struct VolumeInfo {
-    bool ok;      // true если удалось получить данные
-    bool muted;   // состояние mute
-    float volume; // 0.0 .. 1.0
+// Класс-обработчик событий изменения громкости
+class VolumeEvents : public IAudioEndpointVolumeCallback {
+    LONG _refCount = 1;
+public:
+    STDMETHODIMP QueryInterface(REFIID riid, void** ppv) {
+        if (riid == __uuidof(IUnknown) || riid == __uuidof(IAudioEndpointVolumeCallback)) {
+            *ppv = static_cast<IAudioEndpointVolumeCallback*>(this);
+            return S_OK;
+        }
+        *ppv = nullptr; return E_NOINTERFACE;
+    }
+    STDMETHODIMP_(ULONG) AddRef() { return InterlockedIncrement(&_refCount); }
+    STDMETHODIMP_(ULONG) Release() {
+        ULONG res = InterlockedDecrement(&_refCount);
+        if (res == 0) delete this; return res;
+    }
+    // Вызывается системой при изменении громкости или Mute
+    STDMETHODIMP OnNotify(PAUDIO_VOLUME_NOTIFICATION_DATA pData) {
+        std::cout << "{\"mut\": \"" << (pData->bMuted ? 1 : 0) 
+                  << "\", \"vol\": \"" << (int(pData->fMasterVolume * 100.0f + 0.5f)) 
+                  << "\"}" << std::endl;
+        return S_OK;
+    }
 };
 
-// Возвращает VolumeInfo; не бросает исключений
-VolumeInfo get_master_volume_info() {
-    VolumeInfo vi{false, false, 0.0f};
-
-    HRESULT hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
-    bool coInitialized = SUCCEEDED(hr);
-
-    if (FAILED(hr) && hr != RPC_E_CHANGED_MODE) {
-        // не удалось инициализировать COM
-        if (coInitialized) CoUninitialize();
-        return vi;
-    }
+int main() {
+    CoInitializeEx(NULL, COINIT_MULTITHREADED);
 
     IMMDeviceEnumerator* pEnumerator = nullptr;
-    hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), NULL, CLSCTX_ALL,
-                          __uuidof(IMMDeviceEnumerator), (void**)&pEnumerator);
-    if (FAILED(hr) || pEnumerator == nullptr) {
-        if (coInitialized) CoUninitialize();
-        return vi;
+    IMMDevice* pDevice = nullptr;
+    IAudioEndpointVolume* pVolume = nullptr;
+    VolumeEvents* pCallback = new VolumeEvents();
+
+    // 1. Подготовка интерфейсов
+    CoCreateInstance(__uuidof(MMDeviceEnumerator), NULL, CLSCTX_ALL, __uuidof(IMMDeviceEnumerator), (void**)&pEnumerator);
+    pEnumerator->GetDefaultAudioEndpoint(eRender, eConsole, &pDevice);
+    pDevice->Activate(__uuidof(IAudioEndpointVolume), CLSCTX_INPROC_SERVER, NULL, (void**)&pVolume);
+
+    // 2. Регистрация колбэка (теперь Windows сама скажет нам об изменениях)
+    pVolume->RegisterControlChangeNotify(pCallback);
+
+    // Выведем начальное состояние
+    BOOL muted; float vol;
+    pVolume->GetMute(&muted);
+    pVolume->GetMasterVolumeLevelScalar(&vol);
+    std::cout << "{\"mut\": \"" << (muted ? 1 : 0) << "\", \"vol\": \"" << (int(vol * 100.0f + 0.5f)) << "\"}" << std::endl;
+
+    // 3. Бесконечный цикл с минимальным потреблением
+    // Программа просто ждет системных сообщений
+    MSG msg;
+    while (GetMessage(&msg, NULL, 0, 0)) {
+        TranslateMessage(&msg);
+        DispatchMessage(&msg);
     }
 
-    IMMDevice* pEndpoint = nullptr;
-    hr = pEnumerator->GetDefaultAudioEndpoint(eRender, eConsole, &pEndpoint);
-    if (FAILED(hr) || pEndpoint == nullptr) {
-        pEnumerator->Release();
-        if (coInitialized) CoUninitialize();
-        return vi;
-    }
-
-    IAudioEndpointVolume* pEndpointVolume = nullptr;
-    hr = pEndpoint->Activate(__uuidof(IAudioEndpointVolume), CLSCTX_INPROC_SERVER, NULL, (void**)&pEndpointVolume);
-    if (FAILED(hr) || pEndpointVolume == nullptr) {
-        pEndpoint->Release();
-        pEnumerator->Release();
-        if (coInitialized) CoUninitialize();
-        return vi;
-    }
-
-    BOOL bMuted = FALSE;
-    hr = pEndpointVolume->GetMute(&bMuted);
-    if (FAILED(hr)) {
-        // ошибка чтения mute
-        pEndpointVolume->Release();
-        pEndpoint->Release();
-        pEnumerator->Release();
-        if (coInitialized) CoUninitialize();
-        return vi;
-    }
-
-    float volumeLevel = 0.0f;
-    hr = pEndpointVolume->GetMasterVolumeLevelScalar(&volumeLevel);
-    if (FAILED(hr)) {
-        // ошибка чтения уровня
-        pEndpointVolume->Release();
-        pEndpoint->Release();
-        pEnumerator->Release();
-        if (coInitialized) CoUninitialize();
-        return vi;
-    }
-
-    // успех — заполняем структуру
-    vi.ok = true;
-    vi.muted = (bMuted != 0);
-    vi.volume = volumeLevel; // 0.0 .. 1.0
-
-    // освобождение
-    pEndpointVolume->Release();
-    pEndpoint->Release();
+    // Очистка (в данном бесконечном примере недостижима, но полезна для структуры)
+    pVolume->UnregisterControlChangeNotify(pCallback);
+    pVolume->Release();
+    pDevice->Release();
     pEnumerator->Release();
-    if (coInitialized) CoUninitialize();
+    CoUninitialize();
 
-    return vi;
-}
-
-int main() {
-    VolumeInfo vi = get_master_volume_info();
-    if (!vi.ok) {
-        std::cout << "{mut: -, vol: -}" << std::endl;
-        return 1;
-    }
-
-    // Выводим в нужном формате: mut как 0/1, vol в процентах с одной десятой
-    int mut_flag = vi.muted ? 1 : 0;
-    std::cout << "{\"mut\": \"" << mut_flag << "\", \"vol\": \"" << (vi.volume * 100.0f) << "\"}" << std::endl;
     return 0;
 }

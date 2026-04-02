@@ -2,7 +2,7 @@ from variable import *
 W_CPU   = 7 
 W_RAM   = 9
 W_DRIVE = 9
-W_NET   = 7
+W_NET   = 5
 W_VOL   = 7 
 W_GPU   = 8 
 W_TEMP  = 7 
@@ -22,7 +22,7 @@ orientation=False
 keys = ["time", "cpu", "ram", "drive", "network", "volume", "layout", "gpu"]
 if not orientation:
     y=RECT // 2
-    pos = [(x, y) for x in [682, 608, 520, 432, 272, 200, 145, 8]]
+    pos = [(x, y) for x in [647, 575, 480, 392, 272, 200, 145, 8]]
 else:
     x=RECT // 2
     pos = [(x, y) for y in [15,35,55,85,105,125,145,175]]

@@ -69,80 +69,69 @@ static std::string GetProcessPathFromHwndUtf8(HWND hwnd)
     return "<unknown>";
 }
 
+struct EnumData {
+    std::vector<std::string>* items;
+    const std::string* filter;
+};
 static bool IsWindowSkippable(HWND hwnd)
 {
     if (!IsWindowVisible(hwnd)) return true;
-    BOOL cloaked = FALSE;
-    if (SUCCEEDED(DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &cloaked, sizeof(cloaked))) && cloaked)
-        return true;
-    if (GetWindow(hwnd, GW_OWNER) != NULL) return true;
-    LONG_PTR ex = GetWindowLongPtr(hwnd, GWL_EXSTYLE);
-    if (ex & WS_EX_TOOLWINDOW) return true;
-    return false;
-}
 
-struct EnumData {
-    std::vector<std::string>* items;
-    const std::string* filter; // nullptr если без фильтра
-};
-static BOOL CALLBACK EnumWndProc(HWND hwnd, LPARAM lParam)
-{
-    EnumData* d = reinterpret_cast<EnumData*>(lParam);
-    if (!d || !d->items) return TRUE;
-    if (IsWindowSkippable(hwnd)) return TRUE;
-
-    int len = GetWindowTextLengthW(hwnd);
-    if (len <= 0) return TRUE;
-
-    std::vector<wchar_t> titleBuf(len + 1);
-    if (GetWindowTextW(hwnd, titleBuf.data(), static_cast<int>(titleBuf.size())) == 0) return TRUE;
-    std::wstring wtitle(titleBuf.data());
-    std::string titleUtf8 = WideToUtf8(wtitle);
-
-    std::string procPathUtf8 = GetProcessPathFromHwndUtf8(hwnd);
-    if (d->filter && !d->filter->empty()) {
-        std::string filter = *d->filter;
-
-        // Привести пути к нижнему регистру для нечувствительной фильтрации
-        std::transform(procPathUtf8.begin(), procPathUtf8.end(), procPathUtf8.begin(), ::tolower);
-        std::transform(filter.begin(), filter.end(), filter.begin(), ::tolower);
-
-        if (procPathUtf8.find(filter) == std::string::npos) return TRUE; // Пропускаем, если не соответствует фильтру
+    // Проверка, не скрыто ли окно оболочкой (Cloaked)
+    int cloaked = 0;
+    if (SUCCEEDED(DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &cloaked, sizeof(cloaked)))) {
+        if (cloaked != 0) return true; 
     }
 
-    RECT rc = {};
-    RECT ext = {};
-    if (SUCCEEDED(DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &ext, sizeof(ext))))
-        rc = ext;
-    else if (!GetWindowRect(hwnd, &rc))
-        return TRUE;
+    RECT rc;
+    GetWindowRect(hwnd, &rc);
+    if ((rc.right - rc.left) <= 0 || (rc.bottom - rc.top) <= 0) return true;
 
-    int width = rc.right - rc.left;
-    int height = rc.bottom - rc.top;
-    if (width <= 0 || height <= 0) return TRUE;
+    // Проверка на ToolWindow (плавающие панели, которые не должны быть в списке)
+    if (GetWindowLong(hwnd, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) return true;
+
+    return false; 
+}
+
+static BOOL CALLBACK EnumWndProc(HWND hwnd, LPARAM lParam)
+{
+    if (IsWindowSkippable(hwnd)) return TRUE; // Пропускаем мусор
+    // ... остальной код
+    EnumData* d = reinterpret_cast<EnumData*>(lParam);
+
+    wchar_t clsBuf[256] = {0};
+    GetClassNameW(hwnd, clsBuf, 256);
+    std::wstring wcls(clsBuf);
+
+    int len = GetWindowTextLengthW(hwnd);
+    std::wstring wtitle = L"";
+    if (len > 0) {
+        std::vector<wchar_t> titleBuf(len + 1);
+        if (GetWindowTextW(hwnd, titleBuf.data(), static_cast<int>(titleBuf.size()))) {
+            wtitle = titleBuf.data();
+        }
+    }
+
+    if (wtitle.empty()) {
+        wtitle = L"[" + wcls + L"]";
+    }
+
+    std::string procPathUtf8 = GetProcessPathFromHwndUtf8(hwnd);
+
+    RECT rc = {0};
+    if (FAILED(DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &rc, sizeof(rc)))) {
+        GetWindowRect(hwnd, &rc);
+    }
 
     uintptr_t hid = reinterpret_cast<uintptr_t>(hwnd);
-
+    std::string titleUtf8 = WideToUtf8(wtitle);
     std::string escTitle = EscapeForPyUtf8(titleUtf8);
     std::string escPath = EscapeForPyUtf8(procPathUtf8);
 
-    std::string tuple;
-    tuple.reserve(256);
-    tuple += "(";
-    tuple += std::to_string((unsigned long long)hid);
-    tuple += ", '";
-    tuple += escTitle;
-    tuple += "', '";
-    tuple += escPath;
-    tuple += "', (";
-    tuple += std::to_string(rc.left);
-    tuple += ", ";
-    tuple += std::to_string(rc.top);
-    tuple += ", ";
-    tuple += std::to_string(rc.right);
-    tuple += ", ";
-    tuple += std::to_string(rc.bottom);
-    tuple += "))";
+    std::string tuple = "(" + std::to_string((unsigned long long)hid) + 
+                       ", '" + escTitle + "', '" + escPath + "', (" +
+                       std::to_string(rc.left) + ", " + std::to_string(rc.top) + ", " +
+                       std::to_string(rc.right) + ", " + std::to_string(rc.bottom) + "))";
 
     d->items->push_back(tuple);
     return TRUE;

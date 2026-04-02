@@ -43,8 +43,8 @@ class shift:
             s.connect(('localhost', ports['get_key']))
             try:
                 while True:
-                    m = s.recv(4).decode('utf-8', errors='replace')
-                    data = s.recv(int(m))
+                    m=int.from_bytes(s.recv(4), 'big')
+                    data=s.recv(m).decode('utf-8', errors='replace')
                     msg = json.loads(data)
                     self.task_queue.put(msg)
             except Exception as e:
@@ -93,4 +93,4 @@ class shift:
         text = buf.translate(str.maketrans(eng_chars, rus_chars))
         subprocess.run([tools['write'], text])
     def run(self):
-        self.root.after(100, self.run)
+        pass

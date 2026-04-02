@@ -103,10 +103,15 @@ def handle_key_press(out):
     else:
         for value in valu:
             if value == 'left_win+space':
-                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
-                    client_socket.connect(('localhost', ports['get_win']))
-                    m = client_socket.recv(4).decode('utf-8', errors='replace')
-                    data = client_socket.recv(int(m))
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.settimeout(5.0)  # Защита от зависания
+                    s.connect(('localhost', ports['get_win']))
+                    log.info('lay')
+                    # 4 байта из сети сразу интерпретируются как число
+                    raw_header = s.recv(4)
+                    data_len = int.from_bytes(raw_header, 'big')
+
+                    data = s.recv(data_len)
     
                     open_windows = zlib.decompress(data).decode('utf-8')
                     tit = json.loads(open_windows)
@@ -129,10 +134,10 @@ def start_client():
 
         while True:
             try:
-                m = client_socket.recv(4).decode('utf-8', errors='replace')
-                message = client_socket.recv(int(m)).decode('utf-8', errors='replace')
-                handle_key_press(json.loads(message))
-            
+                raw_header = client_socket.recv(4)
+                data_len = int.from_bytes(raw_header, 'big')
+                data = client_socket.recv(data_len).decode('utf-8', errors='replace')
+                handle_key_press(json.loads(data))
             except Exception as e:
                 log.error(f"KeyMan An error occurred: {e}")
 

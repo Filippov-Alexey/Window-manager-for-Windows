@@ -1,86 +1,108 @@
 import socket
-from datetime import datetime
 from plugins.update_status.variable import *
 from variable import *
 import subprocess
 import json
 import time
-import psutil
-import shutil
-import GPUtil
 import threading
 import logger
 log=logger.setup_logging()
 
-_prev_net = psutil.net_io_counters()
-_prev_net_time = time.time()
-stats_item=None
+current_update = 0  
 
-def fmt_speed_bounded(bps):
-    if bps is None:
-        return "-".rjust(W_NET)
-    units = [("GB/s", 1024**3), ("MB/s", 1024**2), ("KB/s", 1024), ("B/s", 1)]
-    for unit, threshold in units:
-        if bps >= threshold:
-            return f"{int(bps / threshold)}{unit}".rjust(W_NET)
-    return f"{int(bps)}B/s".rjust(W_NET)
+full_screen_prev = False
+paused_for_fullscreen = False
+fs=None
+fool = False
+layout=''
 
-def get_network_data(now, prev_net, prev_net_time):
-    interval = max(1e-6, now - prev_net_time)
-    net = psutil.net_io_counters()
-    down_bps = int((net.bytes_recv - prev_net.bytes_recv) / interval)
-    up_bps = int((net.bytes_sent - prev_net.bytes_sent) / interval) 
-    return net, down_bps, up_bps, now
-
-def get_cpu_usage():
-    return int(psutil.cpu_percent(interval=None)) 
-
-def get_ram_free():
-    vm = psutil.virtual_memory()
-    return int(vm.available / (1024**3)) 
-
-def get_disk_free():
-    try:
-        du = shutil.disk_usage("C:\\")
-        return int(du.free / (1024**3))  
-    except Exception:
-        return None
-
-def get_gpu_usage_and_temp():
-    gpu_pct = gpu_temp = None
-    if GPUtil:
-        gpus = GPUtil.getGPUs()
-        if gpus:
-            gpu_pct = int(gpus[0].load * 100.0)
-            gpu_temp = gpus[0].temperature 
-    return gpu_pct, gpu_temp
-
-def get_master_volume_waveout():
-    try:
-        raw_out = subprocess.check_output([tools['vol']], text=True)
-        data = json.loads(raw_out)
-        
-        vol_val = int(float(data['vol']))
-        prefix = '-' if data.get('mut') == '1' else ' '
-        
-        return f"{prefix}{vol_val}"
-    except (subprocess.CalledProcessError, json.JSONDecodeError, KeyError, ValueError) as e:
-        log.error(f"Ошибка получения громкости: {e}")
-        return None
-stats_items = None
-prev_values = {
-    "time": None,
-    "cpu": None,
-    "ram": None,
-    "drive": None,
-    "network_up": None,
-    "network_down": None,
-    "volume": None,
-    "layout": None,
-    "gpu": None
+CONFIG_TEMPLATE = (
+    ("layout", "layout",      " {} ",       W_LAYOUT),
+    ("volume", "vol_pct",     "VOL{}%",    W_VOL),
+    ("ram",    "ram_free_gb", "RAM {} GB",  W_RAM),
+    ("drive",  "c_free_gb",   "C:\\ {}GB", W_DRIVE),
+    ("time",   "tim",         " {}",        W_TIME),
+    ("cpu",    "cpu",         "CPU {}%",    W_CPU),
+)
+# Глобальное хранилище актуальных данных
+_stats_cache = {
+    "vol_pct": " 0", "cpu": 0, "ram_free_gb": 0, "c_free_gb": 0,
+    "down_bps": "0b", "up_bps": "0b", "gpu_pct": 0, "gpu_temp": 0,
+    "tim": "00:00", "layout": ""
 }
-def update_texts(canvas, w, RECT):
-    global stats_items, prev_values
+
+# Интервалы обновления
+UPDATE_CFG = {
+    "vol_pct": UPDATE_VOLUME_S,
+    "cpu": UPDATE_CPU_S,
+    "ram_free_gb": UPDATE_RAM_S,
+    "c_free_gb": UPDATE_DISK_S,
+    "tim": UPDATE_TIME_S,
+    "layout": UPDATE_LAYOUT_S,
+    "gpu_pct": UPDATE_GPU_S,
+    "gpu_temp": UPDATE_GPU_S,
+    "down_bps": UPDATE_NETWORK_S,
+    "up_bps": UPDATE_NETWORK_S,
+}
+
+# Храним время последнего обновления для каждого ключа
+_last_update = {k: 0 for k in _stats_cache}
+
+def generic_listener(key_map, cmd):
+    global _stats_cache, _last_update
+    while True:
+        try:
+            # bufsize=1 и универсальные переносы строк для скорости
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True, bufsize=1)
+            for line in iter(proc.stdout.readline, ''):
+                try:
+                    data = json.loads(line.strip())
+                    now = time.time()
+                    
+                    # Специальная обработка громкости
+                    if "vol" in data:
+                        if now - _last_update["vol_pct"] >= UPDATE_CFG["vol_pct"]:
+                            mut_sign = '-' if data.get('mut') == '1' else ' '
+                            vol_val = int(float(data.get('vol', 0)))
+                            _stats_cache["vol_pct"] = f"{mut_sign}{vol_val}"
+                            _last_update["vol_pct"] = now
+
+                    # Обработка остальных ключей
+                    for k, v in key_map.items():
+                        if k in data and v in UPDATE_CFG:
+                            if now - _last_update[v] >= UPDATE_CFG[v]:
+                                _stats_cache[v] = data[k]
+                                _last_update[v] = now
+                                
+                except (json.JSONDecodeError, ValueError):
+                    continue
+            proc.wait()
+        except Exception:
+            pass
+        time.sleep(1)
+
+timers = {
+    "layout": 0, "time": 0, "network": 0, "cpu": 0,
+    "ram": 0, "disk": 0, "gpu": 0, "volume": 0
+}
+listeners = [
+    ({"vol": "vol_pct", "mut": "vol_mut"}, [tools['vol']]),
+    ({"cpu_load_pct": "cpu"},              [tools['cpu']]),
+    ({"free_gb": "ram_free_gb"},           [tools['ram'], "gb"]),
+    ({"free_gb": "c_free_gb"},             [tools['disk'], "C", "gb"]),
+    ({"gpu_load_pct": "gpu_pct", "gpu_temp_c": "gpu_temp"}, [tools['gpu']]),
+    ({"rx": "down_bps", "tx": "up_bps"},   [tools['net'], "/a", "all", "/min", "kb"]),
+]
+
+for mapping, cmd in listeners:
+    threading.Thread(target=generic_listener, args=(mapping, cmd), daemon=True).start()
+
+_itemconfig=None
+stats_items=None
+def update_texts(canvas, w, RECT): 
+    global stats_items, prev_values, _itemconfig, _stats_cache
+    
+    if _itemconfig is None: _itemconfig = canvas.itemconfigure
     
     if stats_items is None:
         stats_items = {
@@ -90,57 +112,30 @@ def update_texts(canvas, w, RECT):
         }
         prev_values = {k: None for k in keys + ["network_down", "network_up", "gpu_temp"]}
 
-    g = globals()
+    idx = getattr(update_texts, '_idx', 0)
+    key, data_key, fmt_str, width = CONFIG_TEMPLATE[idx]
+    
+    val = _stats_cache.get(data_key)
+    if val != prev_values[key]:
+        txt = fmt_str.replace("{}", str(val)) if val is not None else "-"
+        t=f"{txt:<{width}}"[:width]
+        _itemconfig(stats_items[key], text=t)
+        prev_values[key] = val
+    
+    update_texts._idx = (idx + 1) % len(CONFIG_TEMPLATE)
 
-    config = [
-        ("layout", g.get('layout'), f" {str(g.get('layout'))} " if g.get('layout') else "-", W_LAYOUT),
-        ("volume", g.get('vol_pct'), f"VOL{g.get('vol_pct')}%" if g.get('vol_pct') is not None else "VOL -", W_VOL),
-        ("ram",    g.get('ram_free_gb'), f"RAM {g.get('ram_free_gb')} GB" if g.get('ram_free_gb') else "RAM -", W_RAM),
-        ("drive",  g.get('c_free_gb'), f"C:\\ {g.get('c_free_gb')} GB" if g.get('c_free_gb') else "C:\\ -", W_DRIVE),
-        ("time",   g.get('tim'),   f" {g.get('tim')}", W_TIME),
-        ("cpu",    g.get('cpu'),   f"CPU {g.get('cpu')}%", W_CPU),
-    ]
-
-    for key, val, raw_text, width in config:
-        if val != prev_values[key]:
-            canvas.itemconfigure(stats_items[key], text=f"{raw_text:<{width}}"[:width])
-            prev_values[key] = val
-            break
-
-    d, u = g.get('down_bps', 0), g.get('up_bps', 0)
+    d, u = _stats_cache['down_bps'], _stats_cache['up_bps']
     if d != prev_values["network_down"] or u != prev_values["network_up"]:
-        d_txt = fmt_speed_bounded(d).ljust(W_NET)[:W_NET]
-        u_txt = fmt_speed_bounded(u).ljust(W_NET)[:W_NET]
-        if orientation:
-            snet=f" ↓{d_txt}\n ↑{u_txt}"
-        else:
-            snet=f" ↓{d_txt} ↑{u_txt}"
-            
-        canvas.itemconfigure(stats_items["network"], text=snet)
+        snet = f" ↓{d:>{W_NET}}\n ↑{u:>{W_NET}}" if orientation else f" ↓{d.ljust(W_NET)[:W_NET]} ↑{u.ljust(W_NET)[:W_NET]}"
+        _itemconfig(stats_items["network"], text=snet)
         prev_values["network_down"], prev_values["network_up"] = d, u
 
-    gp, gt = g.get('gpu_pct'), g.get('gpu_temp')
+    gp, gt = _stats_cache['gpu_pct'], _stats_cache['gpu_temp']
     if gp != prev_values["gpu"] or gt != prev_values["gpu_temp"]:
-        if orientation:
-            gpu=f"GPU {int(gp)}%\n T {int(gt)}°C"
-        else:
-            gpu=f"GPU {int(gp)}% T {int(gt)}°C"
-        gpu_text = gpu if gp is not None else "GPU -"
-        limit = W_GPU + W_TEMP
-        canvas.itemconfigure(stats_items["gpu"], text=f"{gpu_text:<{limit}}"[:limit])
+        gpu_s = f"GPU {gp}%\n T {gt}°C" if orientation else f"GPU {gp}% T {gt}°C"
+        _itemconfig(stats_items["gpu"], text=f"{gpu_s:<{W_GPU+W_TEMP}}"[:W_GPU+W_TEMP])
         prev_values["gpu"], prev_values["gpu_temp"] = gp, gt
 
-current_update = 0  
-
-full_screen_prev = False
-paused_for_fullscreen = False
-fs=None
-fool = False
-layout=''
-timers = {
-    "layout": 0, "time": 0, "network": 0, "cpu": 0,
-    "ram": 0, "disk": 0, "gpu": 0, "volume": 0
-}
 class update_status:
     def __init__(self, canvas, root, RECT, w):
          self.canvas=canvas
@@ -173,12 +168,15 @@ class update_status:
             self.lay_elements[hkl_hex] = (txt_id, curr_y)
 
     def draw_layouts(self, current_id):
-        """Обновляет положение селектора и показывает меню"""
-        self.canvas.itemconfig('lay_all', state='normal')
-        if current_id in self.lay_elements:
-            _, curr_y = self.lay_elements[current_id]
-            # Перемещаем рамку выделения под текущий ID
-            self.canvas.coords(self.lay_sel, scr_w - menu_width - padding, curr_y - 2, scr_w - padding, curr_y + 22)
+        try:
+            """Обновляет положение селектора и показывает меню"""
+            self.canvas.itemconfig('lay_all', state='normal')
+            if current_id in self.lay_elements:
+                _, curr_y = self.lay_elements[current_id]
+                # Перемещаем рамку выделения под текущий ID
+                self.canvas.coords(self.lay_sel, scr_w - menu_width - padding, curr_y - 2, scr_w - padding, curr_y + 22)
+        except Exception as e:
+            log.error(e)
 
     def listen_keyboard(self):
         global layout
@@ -187,10 +185,9 @@ class update_status:
             s.connect(('localhost', ports['get_key']))
             while True:
                 try:
-                    m = s.recv(4).decode('utf-8', errors='replace')
-                    if not m: break
-                    buffer = s.recv(int(m)).decode('utf-8', errors='replace').strip()
-                    data = json.loads(buffer)
+                    m=int.from_bytes(s.recv(4), 'big')
+                    data=s.recv(m).decode('utf-8', errors='replace')
+                    data = json.loads(data)
                     
                     op = data.get('option', '')
                     keyname = data.get('key_name')
@@ -199,6 +196,7 @@ class update_status:
                     
                     if key:
                         layout = key['Name'][:2].upper()
+                        _stats_cache["layout"]=layout
 
                     if 'left_win+space' in op:
                         if status == 'Down':
@@ -213,35 +211,8 @@ class update_status:
                 except Exception as e:
                     log.error(f'US-{e}')
 
-    def update_status(self):
-        global full_screen_prev, paused_for_fullscreen, current_update, _prev_net, _prev_net_time, tasks
-        global stats_items, prev_values, net, down_bps, up_bps
-        t = time.time()
-        
-        tasks = [
-            (1, UPDATE_TIME_S,   lambda: globals().update(tim=datetime.now().strftime("%H:%M"))),
-            (2, UPDATE_NETWORK_S, lambda: update_net_data(t)), 
-            (3, UPDATE_CPU_S,    lambda: globals().update(cpu=get_cpu_usage())),
-            (4, UPDATE_RAM_S,    lambda: globals().update(ram_free_gb=get_ram_free())),
-            (5, UPDATE_DISK_S,   lambda: globals().update(c_free_gb=get_disk_free())),
-            (6, UPDATE_GPU_S,    lambda: globals().update(gpu_pct=get_gpu_usage_and_temp()[0], gpu_temp=get_gpu_usage_and_temp()[1])),
-            (7, UPDATE_VOLUME_S, lambda: globals().update(vol_pct=get_master_volume_waveout()))
-        ]
-
-        def update_net_data(t):
-            global net, down_bps, up_bps, _prev_net, _prev_net_time
-            net, down_bps, up_bps, now_n = get_network_data(t, _prev_net, _prev_net_time)
-            _prev_net, _prev_net_time = net, now_n
-        for i in tasks:
-
-            idx, interval, func = i
-            timer_key = list(timers.keys())[idx] 
-            if t - timers[timer_key] > interval:
-                func()
-                timers[timer_key] = t
-
-        update_texts(self.canvas, self.w, self.RECT)
-
     def run(self):
-        self.update_status()
+        _stats_cache['tim']=time.strftime("%H:%M")
+        update_texts(self.canvas, self.w, self.RECT)
+        # self.update_status()
         self.root.after(UPDATE_STATUS_MS, lambda: self.run())

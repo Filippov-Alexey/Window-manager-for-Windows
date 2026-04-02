@@ -6,6 +6,12 @@ import win32com.client
 from PIL import Image, ImageTk
 from pathlib import Path
 import logger
+import queue
+import threading
+full_screen_prev = False
+paused_for_fullscreen = False
+fool = False
+st=None
 log=logger.setup_logging()
 
 def get_shortcuts_from_directory(directory):
@@ -51,95 +57,104 @@ def on_icon_click_factory(exe_path):
 
     return handler
 
+def fs_thread(q):
+    last_status = None
+    addr = ('localhost', ports['is_full_win'])
+    while True:
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                sock.connect(addr)
+                while True:
+                    raw_data = sock.recv(4)
+                    if not raw_data: break
+                    status = int.from_bytes(raw_data, 'big')
+                    if status != last_status:
+                        last_status = status
+                        q.put(status)
+        except Exception:
+            time.sleep(1)
 
-full_screen_prev = False
-paused_for_fullscreen = False
-fool = False
 class shortcut_panel:
     def __init__(self, canvas, root, shortcuts, w):
-         self.canvas=canvas
-         self.root=root
-         self.w=w
-         self.shortcuts=SHORTCUTS_DIR
+        self.canvas = canvas
+        self.root = root
+        self.w = w
+        self.shortcuts_config = SHORTCUTS_DIR 
+        self.fs_val = 0
+        self.fs_queue = queue.Queue()
+        self.icons_loaded = False 
+        
+        if not hasattr(self.canvas, 'images'):
+            self.canvas.images = []
+
+        threading.Thread(target=fs_thread, args=(self.fs_queue,), daemon=True).start()
+
+    def clear_icons(self):
+        """Полная очистка канваса от старых иконок и ссылок на них"""
+        self.canvas.delete("icon")
+        self.canvas.images = []
+        self.icons_loaded = False
+
     def shortcut_panel(self):
         global full_screen_prev, paused_for_fullscreen
-        fs=0
-
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
-            client_socket.settimeout(0.5)
-            try:
-                client_socket.connect(('localhost', ports['is_full_win']))
-                fs = int(client_socket.recv(4).decode('utf-8', errors='replace'))
-
-            except Exception as e:
-                log.error(f"short An error occurred while connecting to the server: {e}")
-                # return
-
-        # Проверяем состояние полноэкранного режима
+        
+        # Получаем последнее состояние из очереди
+        while not self.fs_queue.empty():
+            self.fs_val = self.fs_queue.get_nowait()
+        
+        fs = self.fs_val
+        
         if fs == 1:
             if not full_screen_prev:
-                # Если мы переходим в полноэкранный режим
                 full_screen_prev = True
                 paused_for_fullscreen = True
-                # Скрываем все иконки
-                self.canvas.itemconfigure("icon", state='hidden')  # Скрываем элементы с тегом "icon"
-                self.root.after(UPDATE_GRAPMS, lambda: self.run)
-                # return
+                self.canvas.itemconfigure("icon", state='hidden')
         else:
             if full_screen_prev:
-                # Если мы выходим из полноэкранного режима
                 full_screen_prev = False
                 paused_for_fullscreen = False
-                # Показываем все иконки
-                self.canvas.itemconfigure("icon", state='normal')  # Показываем элементы с тегом "icon"
+                self.canvas.itemconfigure("icon", state='normal')
 
-        # Отображаем иконки
-        if paused_for_fullscreen==False:
-            paused_for_fullscreen=True
-            # log.error(self.shortcuts)
-            for shortcut_dir, start_x, y in self.shortcuts:
-                shortcut_dir = Path(shortcut_dir)
-                shortcuts_in_dir = get_shortcuts_from_directory(shortcut_dir)
-                x = start_x
-
-                for shortcut in shortcuts_in_dir:
+        # Отрисовка: только если НЕ полноэкранный режим и иконки еще не созданы
+        if not paused_for_fullscreen and not self.icons_loaded:
+            # Если нужно перерисовать (например, обновились файлы), 
+            # здесь можно вызвать self.clear_icons()
+            
+            for path_str, start_x, start_y in self.shortcuts_config:
+                shortcut_dir = Path(path_str)
+                x, y = start_x, start_y
+                
+                for shortcut in get_shortcuts_from_directory(shortcut_dir):
                     exe_path, icon_path = get_executable_from_shortcut(shortcut)
                     exe_path = resolve_path(exe_path)
-                    icon_path = resolve_path(icon_path)
-
-                    icon_image = None
+                    
                     icon_file_path = shortcut_dir / f"{shortcut.stem}.png"
                     if icon_file_path.exists():
                         icon_image = Image.open(icon_file_path)
                     else:
                         try:
-                            if icon_path and not os.path.exists(icon_path):
-                                icon_image = extract_icon_from_exe(icon_path)
-                                save_icon(icon_image, shortcut.stem, shortcut_dir)
-                        except Exception as e:
-                            log.error(f"Error extracting icon: {e}")
-                            icon_image = Image.new("RGBA", (ICON_SIZE, ICON_SIZE), (0, 0, 0, 0))
+                            icon_image = extract_icon_from_exe(resolve_path(icon_path))
+                            save_icon(icon_image, shortcut.stem, shortcut_dir)
+                        except Exception:
+                            icon_image = Image.new("RGBA", (ICON_SIZE, ICON_SIZE), (0,0,0,0))
 
-                    if icon_image:
-                        icon_image.thumbnail((ICON_SIZE, ICON_SIZE), Image.LANCZOS)
-                        photo = ImageTk.PhotoImage(icon_image)
+                    icon_image.thumbnail((ICON_SIZE, ICON_SIZE), Image.LANCZOS)
+                    photo = ImageTk.PhotoImage(icon_image)
+                    
+                    # Создаем объект с тегом "icon"
+                    item_id = self.canvas.create_image(
+                        x + ICON_SIZE // 2, y + RECT // 2, 
+                        image=photo, tags="icon"
+                    )
+                    self.canvas.tag_bind(item_id, "<Button-1>", on_icon_click_factory(exe_path))
+                    self.canvas.images.append(photo)
 
-                        item_id = self.canvas.create_image(x + ICON_SIZE // 2, y + RECT // 2, image=photo)
-                        self.canvas.tag_bind(item_id, "<Button-1>", on_icon_click_factory(exe_path))
+                    if orientation: x += ICON_SIZE + GAP
+                    else: y += ICON_SIZE + GAP
+            
+            self.icons_loaded = True
+            paused_for_fullscreen = True # Логика из оригинала: блокируем повторный вход
 
-                        # Добавляем тег "icon" к каждому элементу
-                        self.canvas.addtag_withtag("icon", item_id)
-                        if orientation:
-                            x += ICON_SIZE + GAP
-                        else:
-                            y+= ICON_SIZE + GAP
-
-                        # Запоминаем изображения для управления памятью
-                        if not hasattr(self.canvas, 'images'):
-                            self.canvas.images = []
-                        self.canvas.images.append(photo)
-
-        # root.after(UPDATE_GRAPMS, lambda: shortcut_panel(canvas, root, shortcuts))
     def run(self):
         self.shortcut_panel()
-        self.root.after(UPDATE_GRAPMS, lambda: self.run())
+        self.root.after(UPDATE_GRAPMS, self.run)

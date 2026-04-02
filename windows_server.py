@@ -88,6 +88,7 @@ def bring_window_to_front(hwnd):
                               win32con.SWP_NOMOVE | win32con.SWP_NOSIZE)
     except Exception as ex:
         log.error('Error bringing window to front:', ex)
+import re
 def get_executable_paths_with_open_windows(exe=None):
     args = [tools['getwin']]
     
@@ -105,11 +106,20 @@ def get_executable_paths_with_open_windows(exe=None):
         )
         
         if result.stdout:
+            is_ignored=[]
             out = result.stdout
             try:
                 # Пробуем декодировать вывод 
                 out_utf8_string = ast.literal_eval(out)
-                return out_utf8_string
+                # log.info(out_utf8_string)
+                for i in out_utf8_string:
+                    if i[1] in patterns or i[2] in patterns_for_progs:
+                        continue
+                    else:
+                        is_ignored.append(i)
+
+                # log.info(is_ignored)
+                return is_ignored
             except Exception as decode_ex:
                 log.error(f"Decoding error: {decode_ex}")
         
@@ -123,14 +133,37 @@ class WindowServer:
         self.clients = []
         self.open_windows = []
         self.current_window_attributes = None
-
     def handle_client(self, conn, addr):
-        global serialized_data, aw
         self.clients.append(conn)
+        try:
+            self.send_window_update(conn)
 
+            conn.settimeout(0.5) 
+            try:
+                first_msg = conn.recv(1024)
+                if first_msg:
+                    conn.settimeout(None)
+                    while True:
+                        self.send_window_update(conn)
+                        
+                        time.sleep(0.1)
+                else:
+                    log.info(f"[{addr}] Одноразовый запрос (пустой сигнал)")
+            except socket.timeout:
+                log.info(f"[{addr}] Одноразовое соединение (timeout)")
+
+        except (ConnectionResetError, BrokenPipeError):
+            pass
+        finally:
+            if conn in self.clients: self.clients.remove(conn)
+            conn.close()
+
+    def send_window_update(self, conn):
+        global serialized_data
+        global serialized_data, aw
         current_window = pygetwindow.getActiveWindow()
+        
         if current_window is not None and not current_window in patterns:
-
             self.current_attributes = {
                 'title': current_window.title,
                 'left': current_window.left,
@@ -164,10 +197,9 @@ class WindowServer:
                     aw = self.open_windows
                 if self.open_windows is not None and len(self.open_windows) > 0:
                     serialized_data = zlib.compress(json.dumps(self.open_windows).encode('utf-8',errors='replace'))
-            conn.sendall(f'{len(serialized_data)}'.encode())  
-            conn.sendall(serialized_data)  
-
-        self.clients.remove(conn)
+            # Формируем полный пакет: заголовок (4 байта) + данные
+            packet = len(serialized_data).to_bytes(4, 'big') + serialized_data
+            conn.sendall(packet)
 
     def run_server(self):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:

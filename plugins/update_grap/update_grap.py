@@ -67,7 +67,7 @@ def draw_gradient_line(canvas, x1, y1, x2, y2, color_start, color_end, line_widt
     r1, g1, b1 = hex_to_rgb(color_start)
     r2, g2, b2 = hex_to_rgb(color_end)
 
-    for i in range(steps):
+    for i in prange(steps):
         ratio = i / (steps - 1)
         r = int(r1 + (r2 - r1) * ratio)
         g = int(g1 + (g2 - g1) * ratio)
@@ -81,131 +81,164 @@ def draw_gradient_line(canvas, x1, y1, x2, y2, color_start, color_end, line_widt
         canvas.create_line(intermediate_x, intermediate_y, next_x, next_y,
                         fill=color, width=line_width, tags=tags)
 
-index=-visible_length
-full_string=''
+_itemconfig = None
+title_id = None
+
 def update_title(canvas, tit, RECT_HEIGHT):
-    global active_title, index, title, full_string
+    global active_title, index, title_id, full_string, _itemconfig
     
     raw_text = tit[0][1]
-    # raw_text = " ".join(tit.split())
-    if len(raw_text) > visible_length:
-        s = raw_text[:visible_length - 3].rsplit(' ', 1)[0] + "..."
-    else:
-        s = raw_text
-
-    if active_title != s:
-        active_title = s
-        index = 0
-        padding = " " * visible_length
-        full_string = padding + s + "   " 
-    current_pos = index % len(full_string)
-    tail = full_string[current_pos:] + full_string[:current_pos]
+    display_text = None
     
-    spaces_before_text = len(tail) - len(tail.lstrip(' '))
-    
-    if spaces_before_text >= visible_length:
-        index += (spaces_before_text - (visible_length - 1))
+    if _itemconfig is None:
+        _itemconfig = canvas.itemconfigure
 
-    pos = index % len(full_string)
-    d = (full_string * 2)[pos : pos + visible_length]
+    # 1. Логика бегущей строки
+    if rec:
+        if active_title != raw_text:
+            active_title = raw_text
+            index = 0
+            # Подготовка строки: отступы + текст
+            clean_text = raw_text
+            base_string = (" " * visible_length) + clean_text + "   "
+            full_string = base_string * 2 
 
-    if not title:
-        title = canvas.create_text(1000, RECT_HEIGHT // 2, text=d, 
-                                  anchor="e", fill="white", font=("Consolas", 11), tags="icon")
+        s_len = len(full_string) // 2
+        pos = index % s_len
+        display_text = full_string[pos : pos + visible_length]
+        index += 1
     else:
-        canvas.itemconfigure(title, text=d)
-        
-    index += 1
+        # 2. Обычный статический режим
+        if active_title != raw_text:
+            active_title = raw_text
+            display_text = (raw_text[:visible_length-3] + "...") if len(raw_text) > visible_length else raw_text
 
+    # 3. Отрисовка
+    if title_id is None:
+        title_id = canvas.create_text(
+            1000, RECT_HEIGHT // 2, 
+            text=display_text if display_text else "", 
+            anchor="e", 
+            fill="white", 
+            font=("Consolas", 11), 
+            tags="icon"
+        )
+    elif display_text is not None:
+        _itemconfig(title_id, text=display_text)  
 
 ac=[]
 d=None
 tit=None
 aw=None
-points=None
+points=[]
 d1=None
+import time
+import queue
+import threading
+
 class update_grap:
-    def __init__(self, canvas, root, RECT_HEIGHT,w):
-         self.canvas=canvas
-         self.root=root
-         self.RECT_HEIGHT=RECT_HEIGHT
-         self.aw=None
-    def graph(self):  
-        global d,points,ac,tit, d1
-        active_points = []
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
+    def __init__(self, canvas, root, RECT_HEIGHT, w):
+        self.canvas = canvas
+        self.root = root
+        self.RECT_HEIGHT = RECT_HEIGHT
+        self.w = w
+        self.data_queue = queue.Queue()
+        # Храним последнее состояние прямо в объекте для сравнения в потоке
+        self.current_raw_data = None  
+        threading.Thread(target=self.network_worker, daemon=True).start()
 
-            client_socket.connect(('localhost', ports['get_win']))
-            m = client_socket.recv(4).decode('utf-8', errors='replace')
-            data = client_socket.recv(int(m))
-            
- 
-        if data != d1:
-            d1=data
-            d=zlib.decompress(data)
-            open_windows = d.decode('utf-8')
-            
-            tit = json.loads(open_windows)
+    def network_worker(self):
+        log.info("Сетевой поток запущен")
+        while True:
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.connect(('localhost', ports['get_win']))
+                    s.sendall(b"a")
+                    while True:
+                        # time.sleep(0.08)
+                        raw_header = s.recv(4)
+                        data_len = int.from_bytes(raw_header, 'big')
+                        chunk = s.recv(data_len)
 
-            scale_left = scale_top = scale_right = scale_bottom = 0
-            rects = [w[3] for w in tit] if tit else []
-            for i in prange(len(rects) - 1, -1, -1):
-                normalized_path = os.path.normpath(tit[i][2])
-                if normalized_path in win_rect:
-                    scale_left, scale_top, scale_right, scale_bottom = win_rect[normalized_path]
-                    
-                rect = rects[i]
-                left, top, right, bottom = rect
+                        if chunk != self.current_raw_data:
+                            self.current_raw_data = chunk
+                            self.data_queue.put(chunk)
+                            
+            except Exception as e:
+                log.error(f"Ошибка: {e}. Реконнект...")
+                time.sleep(2)
 
-                new_left = left + (right - left) + scale_left
-                new_top = top + (bottom - top) + scale_top
-                new_right = right - (right - left) - scale_right
-                new_bottom = bottom - (bottom - top) - scale_bottom
-
-                higher = rects[:i]
-                segs = visible_border_segments((new_left, new_top, new_right, new_bottom), higher)
-
-                for s in segs:
-                    x1, y1, x2, y2 = s
-                    active_points.append((x1, y1, x2, y2))
-                    
-                    if (x1, y1, x2, y2) not in points:  
-                        points.append((x1, y1, x2, y2))
-                    if orientation:
-                        is_gradient = (x1 == x2)
-                        color_start = colorUP if (is_gradient or y1 == new_top) else colorDOWN
-                        color_end = colorDOWN if (is_gradient or y1 != new_top) else colorUP
-                    else:
-                        is_gradient = (y1 == y2)
-                        color_start = colorUP if (is_gradient or x1 == new_left) else colorDOWN
-                        color_end = colorDOWN if (is_gradient or x1 != new_left) else colorUP
-
-                    draw_gradient_line(self.canvas, x1, y1, x2, y2, color_start, color_end, line_width=5)
-
-            a = list(set(points) - set(active_points))
-            if ac!=a:
-                ac=a
-                remove = []
-                for item in points:
-                    if item in a:
-                        x1, y1, x2, y2 = item
-                        tag = f"win_{x1}_{y1}_{x2}_{y2}"
-                        self.canvas.delete(tag)
-                        remove.append(item)
-
-                points = [item for item in points if item not in remove]
     def run(self):
-        global points,aw
-        points = points or []
-        try:
-            if not tit is None:
-                update_title(self.canvas, tit, self.RECT_HEIGHT)
-            acw=f'{gw.getActiveWindow()}'
-            if acw!=aw:
-                aw=acw
-                self.graph()
-            
-        except Exception as e:
-            log.error(f"UG An error occurred: 0{e}")
+        global points, tit
         
-        self.root.after(UPDATE_GRAPMS, lambda: self.run())
+        new_data = None
+        while not self.data_queue.empty():
+            new_data = self.data_queue.get()
+        try:
+                
+            if new_data:
+                self.graph(new_data)
+                
+            if tit is not None:
+                update_title(self.canvas, tit, self.RECT_HEIGHT)
+            self.root.after(UPDATE_GRAPMS, self.run)
+        except Exception as e:
+            log.error(e)    
+
+    def graph(self, data):
+        global d, points, ac, tit
+        active_points = []
+
+        d = zlib.decompress(data)
+        open_windows = d.decode('utf-8', errors='replace')
+        tit = json.loads(open_windows)
+        scale_left = scale_top = scale_right = scale_bottom = 0
+        rects = [w[3] for w in tit] if tit else []
+        for i in prange(len(rects) - 1, -1, -1):
+            normalized_path = os.path.normpath(tit[i][2])
+            if normalized_path in win_rect:
+                scale_left, scale_top, scale_right, scale_bottom = win_rect[normalized_path]
+                
+            rect = rects[i]
+            left, top, right, bottom = rect
+
+            new_left = left + (right - left) + scale_left
+            new_top = top + (bottom - top) + scale_top
+            new_right = right - (right - left) - scale_right
+            new_bottom = bottom - (bottom - top) - scale_bottom
+
+            higher = rects[:i]
+            segs = visible_border_segments((new_left, new_top, new_right, new_bottom), higher)
+            # log.warning(segs)
+
+
+            for s in segs:
+                x1, y1, x2, y2 = s
+                active_points.append(s)
+                
+                if s not in points:  
+                    points.append(s)
+                if orientation:
+                    is_gradient = (x1 == x2)
+                    color_start = colorUP if (is_gradient or y1 == new_top) else colorDOWN
+                    color_end = colorDOWN if (is_gradient or y1 != new_top) else colorUP
+                else:
+                    is_gradient = (y1 == y2)
+                    color_start = colorUP if (is_gradient or x1 == new_left) else colorDOWN
+                    color_end = colorDOWN if (is_gradient or x1 != new_left) else colorUP
+
+                draw_gradient_line(self.canvas, x1, y1, x2, y2, color_start, color_end, line_width=5)
+        
+        a = list(set(points) - set(active_points))
+        if ac!=a:
+            ac=a
+            remove = []
+            for item in points:
+                if item in a:
+                    x1, y1, x2, y2 = item
+                    tag = f"win_{x1}_{y1}_{x2}_{y2}"
+                    self.canvas.delete(tag)
+                    remove.append(item)
+
+            points = [item for item in points if item not in remove]
+        

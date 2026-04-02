@@ -110,9 +110,10 @@ def terminate_everything():
     log.info("\nЗавершение работы монитора...")
     stop_all_scripts()
     manage_sticky_keys(disable=False)
-    subprocess.run('taskkill /im blocking.exe /f'.split(), capture_output=True)
-    subprocess.run('taskkill /im win.exe /f'.split(), capture_output=True)
-    subprocess.run('taskkill /im display.exe /f'.split(), capture_output=True)
+    for i,k in tools.items():
+        subprocess.run(f'taskkill /im {k.split('\\')[-1]} /f'.split(), capture_output=True)
+    # subprocess.run('taskkill /im win.exe /f'.split(), capture_output=True)
+    # subprocess.run('taskkill /im display.exe /f'.split(), capture_output=True)
     # restart_explorer()
 clients = []
 
@@ -176,6 +177,7 @@ def restart_panel():
     """Общая функция для перезапуска panel.py"""
     for script in MAIN_SCRIPTS:
         if script == 'panel.py':
+            terminate_everything()
             process = p.get(script)
             if process:
                 log.warning('Restarting panel.py...')

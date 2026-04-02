@@ -57,7 +57,7 @@ h = get_monitors()[0].height
 
 extension=[w,h]
 
-TITLE="!@#$%^&*()_+][poiug]"
+TITLE="ФиЛиПпОв_"
 
 plugins_dir = Path(os.path.expandvars('.')) / "plugins"
 plugins_dir.mkdir(parents=True, exist_ok=True)
@@ -65,20 +65,23 @@ RECT = 26
 patterns = [
     TITLE,
     "Microsoft Text Input Application",
-    "Microsoft*",
     "Системный монитор",
-    "SystemSettings.exe",
     "Program Manager",
-    "ApplicationFrameHost.exe",
+    "ApplicationFrameHost",
     "XTPFrameShadow",
     "Alt-Tab Terminator*",
     "Volume² OSD Window",
+    "ApplicationFrameWindow"
     "Drag",
     "Хост Windows Shell Experience",
     "Block Blast!",
+    "[ApplicationFrameWindow]",
     "Недопустимый дескриптор окна."
 ]
-
+patterns_for_progs=[
+    'D:\\ntwind_altab_terminator_5.2\\AltTabTerminator\\App\\AltTabTerminator\\AltTabTer64.exe'
+    'C:\\Windows\\System32\\ApplicationFrameHost.exe'
+]
 open_one=["C:\\Windows\\system32\\mspaint.exe"]
 win_size={"C:\\Users\\alexey\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe":(7,0,-6,-6)}
 winpos={1:{0:[5,35,805,440],1:[805,35,1920,1078],2:[5,443,805,1078]},'max':[5,35,1920,1078]}

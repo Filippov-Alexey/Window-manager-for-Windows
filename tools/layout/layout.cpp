@@ -21,7 +21,7 @@ int main(int argc, char* argv[]) {
         LPARAM hkl = static_cast<LPARAM>(std::stoull(argv[2], nullptr, 0));
 
         if (IsWindow(hwnd)) {
-            // Отправляем сообщение окну
+            // Отправляем соо,бтбщение окну
             if (PostMessage(hwnd, WM_INPUTLANGCHANGEREQUEST, 0, hkl)) {
                 std::cout << "Success: Layout change request sent to HWND " << raw_hwnd << std::endl;
             } else {

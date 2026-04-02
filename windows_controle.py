@@ -26,12 +26,12 @@ def keywork(stdout):
             except Exception as e:
                 log.info(f"Error processing output: {e}\t{output}")
 def set_window_position(w, wp):
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
-
-        client_socket.connect(('localhost', variable.ports['get_win']))
-        
-        m = client_socket.recv(4).decode('utf-8', errors='replace')
-        data = client_socket.recv(int(m))
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(5.0)  # Защита от зависания
+        s.connect(('localhost', variable.ports['get_win']))
+        raw_header = s.recv(4)
+        data_len = int.from_bytes(raw_header, 'big')
+        data = s.recv(data_len)
     open_windows = zlib.decompress(data).decode('utf-8')
                 
     tit = json.loads(open_windows)
