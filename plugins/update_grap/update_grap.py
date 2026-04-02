@@ -181,9 +181,9 @@ class update_grap:
                 
             if tit is not None:
                 update_title(self.canvas, tit, self.RECT_HEIGHT)
-            self.root.after(UPDATE_GRAPMS, self.run)
         except Exception as e:
             log.error(e)    
+        self.root.after(UPDATE_GRAPMS, self.run)
 
     def graph(self, data):
         global d, points, ac, tit
