@@ -1,3 +1,4 @@
+from socket_client import BaseSocketClient
 import time
 from variable import *
 import socket, threading,json,subprocess,queue
@@ -23,8 +24,9 @@ def get_layout_string(hkl_hex):
                 chars += buf.value
     return chars
 
-class shift:
 
+
+class shift:
     def __init__(self, canvas, root, w, rect):
         self.root = root
         self.canvas = canvas
@@ -32,28 +34,35 @@ class shift:
         self.last_shift_time = 0
         self.double_tap_timeout = 8
         
-        self.task_queue = queue.Queue()
+        # 🟢 Ограничиваем очередь, чтобы избежать накопления задач в ОЗУ
+        self.task_queue = queue.Queue(maxsize=100) 
 
-        threading.Thread(target=self.listen_keyboard, daemon=True).start()
-        
+        # 🟢 Инициализируем клиент (порт get_key, работа с JSON)
+        self.client = BaseSocketClient(ports['get_key'], "Shift-Key")
+
+        # Запускаем потоки
+        threading.Thread(target=self.run_listener, daemon=True).start()
         threading.Thread(target=self.process_tasks, daemon=True).start()
 
-    def listen_keyboard(self):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.connect(('localhost', ports['get_key']))
+    def run_listener(self):
+        """
+        Использует универсальный цикл. 
+        При переполнении очереди старые события будут вытесняться.
+        """
+        def safe_put(msg):
             try:
-                while True:
-                    m=int.from_bytes(s.recv(4), 'big')
-                    data=s.recv(m).decode('utf-8', errors='replace')
-                    msg = json.loads(data)
-                    self.task_queue.put(msg)
-            except Exception as e:
-                log.error(f"Ошибка сокета клавиатуры: {e}, реконнект...")
-                time.sleep(1)
+                if self.task_queue.full():
+                    self.task_queue.get_nowait()
+                self.task_queue.put_nowait(msg)
+            except Exception:
+                pass
+
+        self.client.run_loop(handler=safe_put)
 
     def process_tasks(self):
         while True:
             try:
+                # Извлекаем сообщение из очереди (блокирующее ожидание)
                 msg = self.task_queue.get()
                 key = msg.get('key_name')
                 chars = msg.get('key', '')

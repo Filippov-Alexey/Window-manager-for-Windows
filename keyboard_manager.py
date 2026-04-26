@@ -1,9 +1,8 @@
+from socket_client import BaseSocketClient
 from variable import *
-from windows_controle import *
 import pygetwindow
 import threading
 import subprocess
-import socket
 import logger
 import mouse
 width,height=extension
@@ -71,6 +70,7 @@ active_win=[]
 w=None
 i=1
 cur={}
+win_client = BaseSocketClient(ports['get_win'], "WinSpace-Switcher", is_zlib=True)
 
 def handle_key_press(out):
     global i, w, event, cur
@@ -81,15 +81,13 @@ def handle_key_press(out):
     items = out.get('option', [])
     valu = {key for item in items for key in item.split(', ')}
     
-    w = pygetwindow.getActiveWindow()
-    # log.info(out)
     
-    # if w and w.title != TITLE:
     if out.get('numpan')=='NumPad' and out.get('blocked')=='Blocked':
         handle_numpad_mouse(out)
     elif out.get('status') == 'Up':
         for value in valu:
             if value in ACTIONS:
+                w = pygetwindow.getActiveWindow()
                 ACTIONS[value](w, i)
                 break
 
@@ -102,44 +100,45 @@ def handle_key_press(out):
 
     else:
         for value in valu:
-            if value == 'left_win+space':
-                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                    s.settimeout(5.0)  # Защита от зависания
-                    s.connect(('localhost', ports['get_win']))
-                    log.info('lay')
-                    # 4 байта из сети сразу интерпретируются как число
-                    raw_header = s.recv(4)
-                    data_len = int.from_bytes(raw_header, 'big')
+            # log.info(value)
 
-                    data = s.recv(data_len)
-    
-                    open_windows = zlib.decompress(data).decode('utf-8')
-                    tit = json.loads(open_windows)
-                    rects = [w[0] for w in tit] if tit else []
+            if value == 'left_win+space':
+                log.info('Смена раскладки для всех окон...')
+                
+                # 🟢 Получаем список окон одной командой
+                tit = win_client.request()
+                
+                if tit:
+                    # Извлекаем список HWND (win[0])
+                    hwnds = [win['hwnd'] for win in tit]
+                    
                     try:
-                        current_id = out.get('layout')['HKL']  # Ваше значение '0x0422'
-                        hkl_hex=get_next_layout_hkl(current_id)[0]
-                        for hwnd in rects:
-                            subprocess.run([tools['layout'],f'{hwnd}',f'{hkl_hex}'])
+                        current_id = out.get('layout', {}).get('HKL')
+                        if current_id:
+                            # Получаем hex следующей раскладки
+                            hkl_hex = get_next_layout_hkl(current_id)[0]
+                            
+                            # Рассылаем команду смены раскладки по всем HWND
+                            for hwnd in hwnds:
+                                subprocess.run([tools['layout'], f'{hwnd}', f'{hkl_hex}'], 
+                                            capture_output=True) # Чтобы не спамить в консоль
                     except Exception as e:
-                        log.error(f'kl{e}')
+                        log.error(f'Ошибка смены раскладки: {e}')
                 break
 
     cur = out
 
-def start_client():
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
-        client_socket.connect(('localhost', ports['get_key']))
-        log.info("Connected to server. key")
 
-        while True:
-            try:
-                raw_header = client_socket.recv(4)
-                data_len = int.from_bytes(raw_header, 'big')
-                data = client_socket.recv(data_len).decode('utf-8', errors='replace')
-                handle_key_press(json.loads(data))
-            except Exception as e:
-                log.error(f"KeyMan An error occurred: {e}")
+def start_client():
+    client = BaseSocketClient(
+        port=ports['get_key'], 
+        name="KeyManager-Client"
+    )
+    
+    log.info("KeyManager: попытка подключения к серверу клавиш...")
+    
+    # run_loop берет на себя соединение, заголовок 4 байта и десериализацию JSON
+    client.run_loop(handler=handle_key_press)
 
 if __name__ == "__main__":
     start_client()

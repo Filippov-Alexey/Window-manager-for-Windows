@@ -2,10 +2,6 @@ from numba import prange
 from variable import *
 from plugins.update_grap.variable import *
 import os
-import zlib
-import socket
-import json
-import pygetwindow as gw
 import logger
 log=logger.setup_logging()
 title=''
@@ -77,7 +73,7 @@ def draw_gradient_line(canvas, x1, y1, x2, y2, color_start, color_end, line_widt
         intermediate_y = int(y1 + (y2 - y1) * (i / steps))
         next_x = int(x1 + (x2 - x1) * ((i + 1) / steps))
         next_y = int(y1 + (y2 - y1) * ((i + 1) / steps))
-        tags = [f"win_{x1}_{y1}_{x2}_{y2}","icon"]
+        tags = ["icon",f"win_{x1}_{y1}_{x2}_{y2}"]
         canvas.create_line(intermediate_x, intermediate_y, next_x, next_y,
                         fill=color, width=line_width, tags=tags)
 
@@ -86,8 +82,9 @@ title_id = None
 
 def update_title(canvas, tit, RECT_HEIGHT):
     global active_title, index, title_id, full_string, _itemconfig
+    # log.info(tit)
     
-    raw_text = tit[0][1]
+    raw_text = tit[0]['title']
     display_text = None
     
     if _itemconfig is None:
@@ -132,9 +129,9 @@ tit=None
 aw=None
 points=[]
 d1=None
-import time
 import queue
-import threading
+
+from manager import win_manager  
 
 class update_grap:
     def __init__(self, canvas, root, RECT_HEIGHT, w):
@@ -142,103 +139,100 @@ class update_grap:
         self.root = root
         self.RECT_HEIGHT = RECT_HEIGHT
         self.w = w
-        self.data_queue = queue.Queue()
-        # Храним последнее состояние прямо в объекте для сравнения в потоке
+        self.data_queue = queue.Queue(maxsize=1) 
         self.current_raw_data = None  
-        threading.Thread(target=self.network_worker, daemon=True).start()
+        self.drawn_segments = set() 
+        
+        # 1. Сначала подписываемся на менеджер (получаем уже готовый список)
+        win_manager.subscribe(self.on_window_update)
 
-    def network_worker(self):
-        log.info("Сетевой поток запущен")
-        while True:
-            try:
-                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                    s.connect(('localhost', ports['get_win']))
-                    s.sendall(b"a")
-                    while True:
-                        # time.sleep(0.08)
-                        raw_header = s.recv(4)
-                        data_len = int.from_bytes(raw_header, 'big')
-                        chunk = s.recv(data_len)
+        # 2. Если данные в кэше уже есть — обрабатываем сразу при старте
+        if win_manager.last_data:
+            self.current_raw_data = win_manager.last_data
+            self.graph_logic(win_manager.last_data)
 
-                        if chunk != self.current_raw_data:
-                            self.current_raw_data = chunk
-                            self.data_queue.put(chunk)
-                            
-            except Exception as e:
-                log.error(f"Ошибка: {e}. Реконнект...")
-                time.sleep(2)
+        # 3. Запускаем цикл проверки очереди
+        self.run()
+
+    def on_window_update(self, data):
+        """Метод вызывается менеджером при получении новых данных"""
+        try:
+            # Фильтруем дубликаты сразу, чтобы не нагружать очередь
+            if data != self.current_raw_data:
+                if self.data_queue.full():
+                    self.data_queue.get_nowait()
+                self.data_queue.put_nowait(data)
+        except Exception as e:
+            log.error(f"Grap Queue Error: {e}")
 
     def run(self):
         global points, tit
         
         new_data = None
+        # Берем только самое свежее состояние из очереди
         while not self.data_queue.empty():
-            new_data = self.data_queue.get()
+            new_data = self.data_queue.get_nowait()
+            
         try:
-                
             if new_data:
-                self.graph(new_data)
+                self.current_raw_data = new_data
+                self.graph_logic(new_data)
                 
             if tit is not None:
                 update_title(self.canvas, tit, self.RECT_HEIGHT)
         except Exception as e:
-            log.error(e)    
+            log.error(f"Grap Run Error: {e}")    
+            
         self.root.after(UPDATE_GRAPMS, self.run)
 
-    def graph(self, data):
-        global d, points, ac, tit
-        active_points = []
-
-        d = zlib.decompress(data)
-        open_windows = d.decode('utf-8', errors='replace')
-        tit = json.loads(open_windows)
-        scale_left = scale_top = scale_right = scale_bottom = 0
-        rects = [w[3] for w in tit] if tit else []
-        for i in prange(len(rects) - 1, -1, -1):
-            normalized_path = os.path.normpath(tit[i][2])
+    def graph_logic(self, data_list):
+        global tit, rects
+        
+        tit = data_list
+        
+        rects = [w['rect'] for w in tit] if tit else []
+        # log.info(rects)
+        new_active_segments = set() 
+        for i in range(len(rects) - 1, -1, -1):
+            normalized_path = os.path.normpath(tit[i]['path'])
+            scale_left = scale_top = scale_right = scale_bottom = 0
             if normalized_path in win_rect:
                 scale_left, scale_top, scale_right, scale_bottom = win_rect[normalized_path]
                 
             rect = rects[i]
             left, top, right, bottom = rect
 
-            new_left = left + (right - left) + scale_left
-            new_top = top + (bottom - top) + scale_top
-            new_right = right - (right - left) - scale_right
-            new_bottom = bottom - (bottom - top) - scale_bottom
+            coords = (
+                left + (right - left) + scale_left,
+                top + (bottom - top) + scale_top,
+                right - (right - left) - scale_right,
+                bottom - (bottom - top) - scale_bottom
+            )
 
             higher = rects[:i]
-            segs = visible_border_segments((new_left, new_top, new_right, new_bottom), higher)
-            # log.warning(segs)
-
-
+            segs = visible_border_segments(coords, higher)
+            
             for s in segs:
-                x1, y1, x2, y2 = s
-                active_points.append(s)
-                
-                if s not in points:  
-                    points.append(s)
-                if orientation:
-                    is_gradient = (x1 == x2)
-                    color_start = colorUP if (is_gradient or y1 == new_top) else colorDOWN
-                    color_end = colorDOWN if (is_gradient or y1 != new_top) else colorUP
-                else:
-                    is_gradient = (y1 == y2)
-                    color_start = colorUP if (is_gradient or x1 == new_left) else colorDOWN
-                    color_end = colorDOWN if (is_gradient or x1 != new_left) else colorUP
+                new_active_segments.add(tuple(s))
 
-                draw_gradient_line(self.canvas, x1, y1, x2, y2, color_start, color_end, line_width=5)
+        to_delete = self.drawn_segments - new_active_segments
+        for s in to_delete:
+            tag = f"win_{s[0]}_{s[1]}_{s[2]}_{s[3]}"
+            self.canvas.delete(tag)
         
-        a = list(set(points) - set(active_points))
-        if ac!=a:
-            ac=a
-            remove = []
-            for item in points:
-                if item in a:
-                    x1, y1, x2, y2 = item
-                    tag = f"win_{x1}_{y1}_{x2}_{y2}"
-                    self.canvas.delete(tag)
-                    remove.append(item)
+        to_add = new_active_segments - self.drawn_segments
+        for s in to_add:
+            x1, y1, x2, y2 = s
+            
+            if orientation:
+                is_gradient = (x1 == x2)
+                color_start = colorUP if (is_gradient or y1 == coords[1]) else colorDOWN
+                color_end = colorDOWN if (is_gradient or y1 != coords[1]) else colorUP
+            else:
+                is_gradient = (y1 == y2)
+                color_start = colorUP if (is_gradient or x1 == coords[0]) else colorDOWN
+                color_end = colorDOWN if (is_gradient or x1 != coords[0]) else colorUP
 
-            points = [item for item in points if item not in remove]
-        
+            draw_gradient_line(self.canvas, x1, y1, x2, y2, color_start, color_end, line_width=5)
+
+        self.drawn_segments = new_active_segments

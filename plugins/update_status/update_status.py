@@ -1,4 +1,4 @@
-import socket
+from socket_client import BaseSocketClient
 from plugins.update_status.variable import *
 from variable import *
 import subprocess
@@ -8,58 +8,24 @@ import threading
 import logger
 log=logger.setup_logging()
 
-current_update = 0  
-
-full_screen_prev = False
-paused_for_fullscreen = False
-fs=None
-fool = False
 layout=''
-
-CONFIG_TEMPLATE = (
-    ("layout", "layout",      " {} ",       W_LAYOUT),
-    ("volume", "vol_pct",     "VOL{}%",    W_VOL),
-    ("ram",    "ram_free_gb", "RAM {} GB",  W_RAM),
-    ("drive",  "c_free_gb",   "C:\\ {}GB", W_DRIVE),
-    ("time",   "tim",         " {}",        W_TIME),
-    ("cpu",    "cpu",         "CPU {}%",    W_CPU),
-)
-# Глобальное хранилище актуальных данных
-_stats_cache = {
-    "vol_pct": " 0", "cpu": 0, "ram_free_gb": 0, "c_free_gb": 0,
-    "down_bps": "0b", "up_bps": "0b", "gpu_pct": 0, "gpu_temp": 0,
-    "tim": "00:00", "layout": ""
-}
-
-# Интервалы обновления
-UPDATE_CFG = {
-    "vol_pct": UPDATE_VOLUME_S,
-    "cpu": UPDATE_CPU_S,
-    "ram_free_gb": UPDATE_RAM_S,
-    "c_free_gb": UPDATE_DISK_S,
-    "tim": UPDATE_TIME_S,
-    "layout": UPDATE_LAYOUT_S,
-    "gpu_pct": UPDATE_GPU_S,
-    "gpu_temp": UPDATE_GPU_S,
-    "down_bps": UPDATE_NETWORK_S,
-    "up_bps": UPDATE_NETWORK_S,
-}
-
-# Храним время последнего обновления для каждого ключа
+_stats_cache=stats_cache
 _last_update = {k: 0 for k in _stats_cache}
 
 def generic_listener(key_map, cmd):
     global _stats_cache, _last_update
     while True:
         try:
-            # bufsize=1 и универсальные переносы строк для скорости
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True, bufsize=1)
             for line in iter(proc.stdout.readline, ''):
                 try:
                     data = json.loads(line.strip())
                     now = time.time()
                     
-                    # Специальная обработка громкости
+                    if now - _last_update["tim"] >= UPDATE_CFG["tim"]:
+                        _stats_cache['tim'] = time.strftime(time_format)
+                        _last_update["tim"] = now
+
                     if "vol" in data:
                         if now - _last_update["vol_pct"] >= UPDATE_CFG["vol_pct"]:
                             mut_sign = '-' if data.get('mut') == '1' else ' '
@@ -67,7 +33,6 @@ def generic_listener(key_map, cmd):
                             _stats_cache["vol_pct"] = f"{mut_sign}{vol_val}"
                             _last_update["vol_pct"] = now
 
-                    # Обработка остальных ключей
                     for k, v in key_map.items():
                         if k in data and v in UPDATE_CFG:
                             if now - _last_update[v] >= UPDATE_CFG[v]:
@@ -79,20 +44,7 @@ def generic_listener(key_map, cmd):
             proc.wait()
         except Exception:
             pass
-        time.sleep(1)
 
-timers = {
-    "layout": 0, "time": 0, "network": 0, "cpu": 0,
-    "ram": 0, "disk": 0, "gpu": 0, "volume": 0
-}
-listeners = [
-    ({"vol": "vol_pct", "mut": "vol_mut"}, [tools['vol']]),
-    ({"cpu_load_pct": "cpu"},              [tools['cpu']]),
-    ({"free_gb": "ram_free_gb"},           [tools['ram'], "gb"]),
-    ({"free_gb": "c_free_gb"},             [tools['disk'], "C", "gb"]),
-    ({"gpu_load_pct": "gpu_pct", "gpu_temp_c": "gpu_temp"}, [tools['gpu']]),
-    ({"rx": "down_bps", "tx": "up_bps"},   [tools['net'], "/a", "all", "/min", "kb"]),
-]
 
 for mapping, cmd in listeners:
     threading.Thread(target=generic_listener, args=(mapping, cmd), daemon=True).start()
@@ -106,11 +58,11 @@ def update_texts(canvas, w, RECT):
     
     if stats_items is None:
         stats_items = {
-            k: canvas.create_text(w - off[0], off[1], text="", anchor="e", 
+            k: canvas.create_text(w - off[0], off[1], text="NON", anchor="e", 
                                   fill="white", font=("Consolas", 11), tags='icon')
             for k, off in zip(keys, pos)
         }
-        prev_values = {k: None for k in keys + ["network_down", "network_up", "gpu_temp"]}
+        prev_values = {k: None for k in keys + ["desk","network_down", "network_up", "gpu_temp"]}
 
     idx = getattr(update_texts, '_idx', 0)
     key, data_key, fmt_str, width = CONFIG_TEMPLATE[idx]
@@ -137,16 +89,54 @@ def update_texts(canvas, w, RECT):
         prev_values["gpu"], prev_values["gpu_temp"] = gp, gt
 
 class update_status:
-    def __init__(self, canvas, root, RECT, w):
-         self.canvas=canvas
-         self.root=root
-         self.w=w
-         self.RECT=RECT
-         self.lay= False
-         self.current_hkl=0
-         self.init_layouts_ui()
-         threading.Thread(target=self.listen_keyboard, daemon=True).start()
 
+    def __init__(self, canvas, root, RECT, w):
+        self.canvas = canvas
+        self.root = root
+        self.w = w
+        self.RECT = RECT
+        self.lay = False
+        self.current_hkl = 0
+        self.init_layouts_ui()
+        
+        # 🟢 Инициализируем клиенты
+        self.key_client = BaseSocketClient(ports['get_key'], "Status-Key")
+        self.space_client = BaseSocketClient(ports['get_space'], "Status-Space", is_json=False)
+
+        # Запускаем потоки
+        threading.Thread(target=self.run_keyboard_listener, daemon=True).start()
+        threading.Thread(target=self.run_space_listener, daemon=True).start()
+
+    def run_space_listener(self):
+        self.space_client.run_loop(handler=self._update_desk_cache)
+
+    def _update_desk_cache(self, data):
+        _stats_cache['desk'] = data.decode('utf-8', errors='replace')
+
+    def run_keyboard_listener(self):
+        self.key_client.run_loop(handler=self.handle_keyboard_logic)
+
+    def handle_keyboard_logic(self, data):
+        global layout
+        
+        op = data.get('option', '')
+        keyname = data.get('key_name')
+        status = data.get('status')
+        key = data.get('layout')
+        
+        if key:
+            layout = key['Name'][:2].upper()
+            _stats_cache["layout"] = layout
+
+        if 'left_win+space' in op:
+            if status == 'Down':
+                self.current_hkl = get_next_layout_hkl(key['HKL'])[0]
+                self.lay = True
+                self.draw_layouts(self.current_hkl)
+
+        elif self.lay and keyname == 'left_win':
+            self.lay = False
+            self.canvas.itemconfig('lay_all', state='hidden')
     def init_layouts_ui(self):
         """Вызовите этот метод один раз при инициализации класса"""
         self.lay_elements = {}
@@ -178,41 +168,7 @@ class update_status:
         except Exception as e:
             log.error(e)
 
-    def listen_keyboard(self):
-        global layout
-        # Не забудьте вызвать self.init_layouts_ui() перед запуском этого цикла
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.connect(('localhost', ports['get_key']))
-            while True:
-                try:
-                    m=int.from_bytes(s.recv(4), 'big')
-                    data=s.recv(m).decode('utf-8', errors='replace')
-                    data = json.loads(data)
-                    
-                    op = data.get('option', '')
-                    keyname = data.get('key_name')
-                    status = data.get('status')
-                    key = data.get('layout')
-                    
-                    if key:
-                        layout = key['Name'][:2].upper()
-                        _stats_cache["layout"]=layout
-
-                    if 'left_win+space' in op:
-                        if status == 'Down':
-                            self.current_hkl = get_next_layout_hkl(key['HKL'])[0]
-                            self.lay = True
-                            self.draw_layouts(self.current_hkl)
-
-                    elif self.lay and keyname == 'left_win':
-                        self.lay = False
-                        self.canvas.itemconfig('lay_all', state='hidden')
-                        
-                except Exception as e:
-                    log.error(f'US-{e}')
 
     def run(self):
-        _stats_cache['tim']=time.strftime("%H:%M")
         update_texts(self.canvas, self.w, self.RECT)
-        # self.update_status()
         self.root.after(UPDATE_STATUS_MS, lambda: self.run())

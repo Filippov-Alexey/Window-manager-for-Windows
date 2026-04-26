@@ -73,54 +73,91 @@ struct EnumData {
     std::vector<std::string>* items;
     const std::string* filter;
 };
-static bool IsWindowSkippable(HWND hwnd)
-{
+
+
+bool IsWindowSkippable(HWND hwnd) {
     if (!IsWindowVisible(hwnd)) return true;
 
-    // Проверка, не скрыто ли окно оболочкой (Cloaked)
     int cloaked = 0;
     if (SUCCEEDED(DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &cloaked, sizeof(cloaked)))) {
         if (cloaked != 0) return true; 
     }
 
-    RECT rc;
-    GetWindowRect(hwnd, &rc);
-    if ((rc.right - rc.left) <= 0 || (rc.bottom - rc.top) <= 0) return true;
+    LONG exStyle = GetWindowLong(hwnd, GWL_EXSTYLE);
+    LONG style = GetWindowLong(hwnd, GWL_STYLE);
 
-    // Проверка на ToolWindow (плавающие панели, которые не должны быть в списке)
-    if (GetWindowLong(hwnd, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) return true;
+    if (exStyle & WS_EX_TOOLWINDOW) return true;
 
-    return false; 
+    HWND owner = GetWindow(hwnd, GW_OWNER);
+    if (owner != NULL) {
+        wchar_t clsBuf[256];
+        GetClassNameW(hwnd, clsBuf, 256);
+        std::wstring cls(clsBuf);
+
+        bool isDialogClass = (cls == L"#32770");
+        bool hasAppWindow = (exStyle & WS_EX_APPWINDOW);
+        
+        if (!isDialogClass && !hasAppWindow) {
+            return true;
+        }
+    }
+
+    wchar_t clsBuf[256];
+    if (GetClassNameW(hwnd, clsBuf, 256)) {
+        std::wstring cls(clsBuf);
+        if (cls == L"Progman" || cls == L"Shell_TrayWnd" || 
+            cls == L"Windows.UI.Core.CoreWindow" || 
+            cls == L"IconTrayClone" || 
+            cls == L"EdgeUiInputTopWndClass") {
+            return true;
+        }
+    }
+    if (GetWindowTextLengthW(hwnd) == 0) return true;
+
+    return false;
 }
-
-static BOOL CALLBACK EnumWndProc(HWND hwnd, LPARAM lParam)
-{
-    if (IsWindowSkippable(hwnd)) return TRUE; // Пропускаем мусор
-    // ... остальной код
+BOOL CALLBACK EnumWndProc(HWND hwnd, LPARAM lParam) {
+    if (IsWindowSkippable(hwnd)) return TRUE; 
     EnumData* d = reinterpret_cast<EnumData*>(lParam);
 
-    wchar_t clsBuf[256] = {0};
-    GetClassNameW(hwnd, clsBuf, 256);
-    std::wstring wcls(clsBuf);
+    // 1. ОПРЕДЕЛЕНИЕ ТИПА
+    std::string winType = "normal";
+    wchar_t clsCheck[256] = {0};
+    GetClassNameW(hwnd, clsCheck, 256);
+    std::wstring wclsCheck(clsCheck);
+    HWND owner = GetWindow(hwnd, GW_OWNER);
+    if (wclsCheck == L"#32770" || owner != NULL) {
+        winType = "dialog";
+    }
+
+    // 2. ДАННЫЕ ОКНА
+    HWND foregroundHwnd = GetForegroundWindow();
+    int isActive = (hwnd == foregroundHwnd) ? 1 : 0;
 
     int len = GetWindowTextLengthW(hwnd);
     std::wstring wtitle = L"";
     if (len > 0) {
         std::vector<wchar_t> titleBuf(len + 1);
-        if (GetWindowTextW(hwnd, titleBuf.data(), static_cast<int>(titleBuf.size()))) {
+        if (GetWindowTextW(hwnd, titleBuf.data(), (int)titleBuf.size())) {
             wtitle = titleBuf.data();
         }
     }
-
-    if (wtitle.empty()) {
-        wtitle = L"[" + wcls + L"]";
-    }
-
+    if (wtitle.empty()) wtitle = wclsCheck;
+    
     std::string procPathUtf8 = GetProcessPathFromHwndUtf8(hwnd);
-
     RECT rc = {0};
     if (FAILED(DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &rc, sizeof(rc)))) {
         GetWindowRect(hwnd, &rc);
+    }
+
+    HMONITOR hMonitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO mi = { sizeof(mi) };
+    int isFullscreen = 0;
+    if (GetMonitorInfo(hMonitor, &mi)) {
+        if (rc.left <= mi.rcMonitor.left && rc.top <= mi.rcMonitor.top && 
+            rc.right >= mi.rcMonitor.right && rc.bottom >= mi.rcMonitor.bottom) {
+            isFullscreen = 1;
+        }
     }
 
     uintptr_t hid = reinterpret_cast<uintptr_t>(hwnd);
@@ -128,17 +165,26 @@ static BOOL CALLBACK EnumWndProc(HWND hwnd, LPARAM lParam)
     std::string escTitle = EscapeForPyUtf8(titleUtf8);
     std::string escPath = EscapeForPyUtf8(procPathUtf8);
 
-    std::string tuple = "(" + std::to_string((unsigned long long)hid) + 
-                       ", '" + escTitle + "', '" + escPath + "', (" +
-                       std::to_string(rc.left) + ", " + std::to_string(rc.top) + ", " +
-                       std::to_string(rc.right) + ", " + std::to_string(rc.bottom) + "))";
+    // 3. ФОРМИРОВАНИЕ СЛОВАРЯ (Ключ: Значение)
+    // Используем формат Python dict: {'key': value}
+    std::string dictEntry = "{"
+        "'active': " + std::to_string(isActive) + ", " +
+        "'hwnd': " + std::to_string((unsigned long long)hid) + ", " +
+        "'title': '" + escTitle + "', " +
+        "'path': '" + escPath + "', " +
+        "'type': '" + winType + "', " +
+        "'rect': (" + std::to_string(rc.left) + ", " + std::to_string(rc.top) + ", " + std::to_string(rc.right) + ", " + std::to_string(rc.bottom) + "), " +
+        "'full': " + std::to_string(isFullscreen) + ""
+    "}";
 
-    d->items->push_back(tuple);
+    d->items->push_back(dictEntry);
     return TRUE;
 }
 
 int wmain(int argc, wchar_t* argv[])
 {
+    SetConsoleOutputCP(CP_UTF8);
+
     std::string filterUtf8;
     const std::string* filterPtr = nullptr;
     if (argc > 1) {
@@ -146,18 +192,29 @@ int wmain(int argc, wchar_t* argv[])
         filterPtr = &filterUtf8;
     }
 
-    std::vector<std::string> items;
-    EnumData data{ &items, filterPtr };
-    EnumWindows(EnumWndProc, reinterpret_cast<LPARAM>(&data));
+    std::string lastOut = ""; // Хранилище предыдущего состояния
 
-    std::string out = "[";
-    for (size_t i = 0; i < items.size(); ++i) {
-        out += items[i];
-        if (i + 1 < items.size()) out += ", ";
+    while (true) {
+        std::vector<std::string> items;
+        EnumData data{ &items, filterPtr };
+        EnumWindows(EnumWndProc, reinterpret_cast<LPARAM>(&data));
+
+        // Сборка текущей строки JSON/Python list
+        std::string currentOut = "[";
+        for (size_t i = 0; i < items.size(); ++i) {
+            currentOut += items[i];
+            if (i + 1 < items.size()) currentOut += ", ";
+        }
+        currentOut += "]";
+
+        // ВЫВОД ТОЛЬКО ПРИ НАЛИЧИИ ИЗМЕНЕНИЙ
+        if (currentOut != lastOut) {
+            std::cout << currentOut << std::endl;
+            lastOut = currentOut; // Обновляем состояние
+        }
+
+        Sleep(100); // Пауза 0.5 сек, чтобы не грузить CPU
     }
-    out += "]";
 
-    SetConsoleOutputCP(CP_UTF8);
-    std::cout << out << std::endl;
     return 0;
 }

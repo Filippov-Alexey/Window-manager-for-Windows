@@ -1,13 +1,17 @@
 from ctypes import windll
 from tkinter import Tk, Canvas
 from variable import *
+from manager import win_manager
 import os
 import importlib.util
 import time
 import subprocess
-import logger
 import socket
+import json
+import zlib
+import logger
 import threading
+
 log=logger.setup_logging()
 log.info('run')
 log.info(os.getpid())
@@ -57,6 +61,7 @@ def draw_rounded_rectangle(canvas, x1, y1, x2, y2, radius, **kwargs):
     canvas.addtag_withtag("icon", arc4_id)
 x=1000
 def status(canvas,height,color):
+    draw_rounded_rectangle(canvas, x+195,0,x+215,height,5,fill=color)
     draw_rounded_rectangle(canvas, x+225,0,x+280,height,5,fill=color)
     draw_rounded_rectangle(canvas, x+285,0,x+350,height,5,fill=color)
     draw_rounded_rectangle(canvas, x+360,0,x+443,height,5,fill=color)
@@ -66,11 +71,13 @@ def status(canvas,height,color):
     draw_rounded_rectangle(canvas, x+735,0,x+770,height,5,fill=color)
     draw_rounded_rectangle(canvas, x+780,0,x+915,height,5,fill=color)
 def shortcut(canvas,height,color):
+    draw_rounded_rectangle(canvas, 1165,0,1190,height,5,fill=color)
     draw_rounded_rectangle(canvas, 1115,0,1160,height,5,fill=color)
     draw_rounded_rectangle(canvas, 1040,0,1100,height,5,fill=color)
     draw_rounded_rectangle(canvas, 830,0,1010,height,5,fill=color)
     draw_rounded_rectangle(canvas, 550,0,800,height,5,fill=color)
     draw_rounded_rectangle(canvas, 450,0,510,height,5,fill=color)
+    
 def send_updates(message, clients):
     if clients and message:
         for conn in list(clients):
@@ -112,7 +119,7 @@ def set_taskbar_visible(visible=True):
 
 # Создаем сокет заранее (вне функции, чтобы не плодить подключения)
 import queue
-data_queue = queue.Queue()
+data_queue = queue.Queue() 
 
 class State:
     last_tk_tick = time.time()
@@ -122,7 +129,7 @@ state = State()
 def run_server():
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
         server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        server_socket.bind(('127.0.0.1', 65438))
+        server_socket.bind(('localhost', 65438))
         server_socket.listen(5)
         time.sleep(5)
         while True:
@@ -146,8 +153,8 @@ def run_server():
                     with conn:
                         
                         # Логика отправки
-                        if not data_queue.empty():
-                            msg = data_queue.get_nowait()
+                        if not dq.empty():
+                            msg = dq.get_nowait()
                             payload = msg.encode('utf-8')
                             conn.sendall(f'{len(payload)}\n'.encode())
                             conn.sendall(payload)
@@ -157,24 +164,74 @@ def run_server():
                     continue 
                 except Exception as e:
                     log.error(f"Ошибка: {e}")
-
+dq=queue.Queue() 
 def update(canvas):
     try:
         # Обновляем метку времени — "я жив"
         state.last_tk_tick = time.time()
         
-        data_queue.put('ok\n')
+        dq.put('ok\n')
         
         canvas.after(500, lambda: update(canvas))
     except Exception as e:
         log.error(f'err-{e}')
 
 threading.Thread(target=run_server, daemon=True).start()
+from socket_client import BaseSocketClient
+
+
+def socket_worker(q, port):
+    client = BaseSocketClient(
+        port=port, 
+        name=f"Panel-Port-{port}", 
+        is_json=False
+    )
+
+    def safe_put(data):
+        if q.full():
+            try: q.get_nowait()
+            except: pass
+        q.put(data)
+
+    client.run_loop(handler=safe_put, init_msg=b"a")
+
+thread = threading.Thread(
+    target=socket_worker, 
+    args=(data_queue, ports['get_win']), 
+    daemon=True
+)
+thread.start()
+icons_visible = None 
+ow = None
+
+def process_queue(canvas, q):
+    global ow, icons_visible
+    last_data = ''
+    try:
+        while not q.empty():
+            last_data = q.get_nowait()
+            
+        if last_data and last_data != ow:
+            ow = last_data
+            
+            raw_json = zlib.decompress(last_data).decode('utf-8')
+            open_windows = json.loads(raw_json)
+            if open_windows:
+                should_be_visible = (open_windows[0]['full'] == 0)
+                
+                if should_be_visible != icons_visible:
+                    new_state = 'normal' if should_be_visible else 'hidden'
+                    canvas.itemconfigure("icon", state=new_state)
+                    icons_visible = should_be_visible
+                    
+    except Exception as e:
+        log.error(f"Queue processing error: {e}")
+    finally:
+        canvas.after(60, lambda: process_queue(canvas, q))
 
 def main():
 
     root = Tk()
-    # root.title("pop")
     root.title(TITLE)
 
     # 1. Считаем общие габариты всех мониторов
@@ -211,10 +268,16 @@ def main():
     p=load_plugins()
     for i, module in enumerate(p):
         class_name = module.__name__.split('.')[-1]
+        # if class_name=='alt_tab':
+        #     continue
         root.after(100 * (i + 1), lambda m=module, cn=class_name: getattr(m, cn)(canvas, root, RECT, extension[0]).run())
         k=i
     root.after(100*(k+1),lambda: subprocess.run([tools['press'],'packet']))
     root.after(100*(k+2),lambda: update(canvas))
+    root.after(100*(k+3), lambda: process_queue(canvas, data_queue))
+    # Инициализация
+    # Убедитесь, что переменная ports импортирована или определена выше
+    win_manager.start()
     root.mainloop()
 if __name__=="__main__":
     main()

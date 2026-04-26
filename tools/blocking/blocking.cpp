@@ -392,8 +392,6 @@ LRESULT CALLBACK KeyboardHookCallback(int nCode, WPARAM wParam, LPARAM lParam) {
     std::string panel = "Main";
     std::string status = "";
 
-    // 1. Определение панели (Main vs NumPad)
-    // Добавляем VK_CLEAR (это 5-ка при выключенном NumLock)
     if ((vk >= VK_NUMPAD0 && vk <= VK_NUMPAD9) || vk == VK_MULTIPLY || 
         vk == VK_ADD || vk == VK_SUBTRACT || vk == VK_DECIMAL || vk == VK_CLEAR) {
         panel = "NumPad";
@@ -650,15 +648,11 @@ int main(int argc, char* argv[]) {
     ParseKeyCodeFile("key_code.txt");
     GetInitialLanguage();
     
-SetConsoleOutputCP(CP_UTF8);
-setvbuf(stdout, nullptr, _IOFBF, 1000); // Чтобы избежать разрыва UTF-8 последовательностей
+    SetConsoleOutputCP(CP_UTF8);
+    setvbuf(stdout, nullptr, _IOFBF, 1000); // Чтобы избежать разрыва UTF-8 последовательностей
 
-std::thread(TerminateOtherInstances, L"blocking.exe").detach();
-    // SetConsoleOutputCP(CP_UTF8);
-    // setvbuf(stdout, nullptr, _IONBF, 0);
-
+    std::thread(TerminateOtherInstances, L"blocking.exe").detach();
     HHOOK keyboardHook = SetWindowsHookEx(WH_KEYBOARD_LL, KeyboardHookCallback, NULL, 0);
-        // keyboardHook = SetWindowsHookEx(WH_KEYBOARD_LL, KeyboardHookCallback, NULL, 0);
     if (!keyboardHook) {
         std::cerr << "Failed to install hook!" << std::endl;
         return 1;

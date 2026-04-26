@@ -31,7 +31,6 @@ def get_layout_names():
 layouts=get_layout_names()
 
 def get_index_layout_list(current_id):
-    log.warning(current_id)
     current_index = -1
     try:
         for i,k in enumerate(layouts):
@@ -47,7 +46,6 @@ def get_next_layout_hkl(current_id):
     try:        
          if current_index != -1:
             next_index = (current_index + 1) % len(layouts)
-            log.warning(layouts[next_index])
             return layouts[next_index]
     except Exception as e:
         print(e)
@@ -84,8 +82,37 @@ patterns_for_progs=[
 ]
 open_one=["C:\\Windows\\system32\\mspaint.exe"]
 win_size={"C:\\Users\\alexey\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe":(7,0,-6,-6)}
-winpos={1:{0:[5,35,805,440],1:[805,35,1920,1078],2:[5,443,805,1078]},'max':[5,35,1920,1078]}
+import fnmatch
 
+def is_ignored(window_title):
+    if not window_title:
+        return True
+        
+    for pattern in patterns:
+        if fnmatch.fnmatch(window_title, pattern):
+            return True
+    return False
+
+margin=5
+def get_winpos(screen_width, screen_height, taskbar_height=RECT+10, margin=5):
+    W = screen_width
+    H = screen_height
+    T = taskbar_height
+    M = margin
+
+    split_x = int(W * 0.4) 
+    split_y = int(H * 0.4)
+
+    return {
+        1: {
+            0: [M, T, split_x, split_y - M],
+            1: [M, split_y, split_x, H],
+            2: [split_x, T, W, H]
+        },
+        'max': [M, T, W, H]
+    }
+winpos = get_winpos(w,h)
+tile_mode = 'grid'
 ACTIONS = {
     'pause':             lambda w, i: mouse.click('right'),
     'left_shift+pause':  lambda w, i: mouse.click('right'),
@@ -110,4 +137,6 @@ ACTIONS = {
 }
 
 new_win_open_max=True
-ports={'get_key':65431,'get_win':65432,'is_full_win':65433,'get_display':65434}
+ports={'get_key':65431,'get_win':65432,'get_display':65434,'get_space':65435}
+
+desktop={'space':'5', 'x':'3000', 'y':'0', 'interval':'3000'}

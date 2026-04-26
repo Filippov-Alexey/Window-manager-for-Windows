@@ -14,9 +14,9 @@ ORIGINAL_STICKY_FLAGS = None
 MAIN_SCRIPTS = ["windows_server.py", 
                 "display_server.py",
                 "windows_controle.py", 
+                "space_server.py",
                 "keyboard_server.py", 
                 "keyboard_manager.py", 
-                "windows_is_full_server.py", 
                 "panel.py"
                 ]
 venv_path = 'venv'
@@ -112,33 +112,6 @@ def terminate_everything():
     manage_sticky_keys(disable=False)
     for i,k in tools.items():
         subprocess.run(f'taskkill /im {k.split('\\')[-1]} /f'.split(), capture_output=True)
-    # subprocess.run('taskkill /im win.exe /f'.split(), capture_output=True)
-    # subprocess.run('taskkill /im display.exe /f'.split(), capture_output=True)
-    # restart_explorer()
-clients = []
-
-def handle_client(conn, addr):
-    """Обработчик для каждого клиента."""
-    clients.append(conn)
-    try:
-        while True:
-            time.sleep(1)
-    except (ConnectionResetError, BrokenPipeError):
-        log.error(f"Connection lost with {addr}.")
-    except Exception as e:
-        log.error(f"Error with client {addr}: {e}")
-    finally:
-        clients.remove(conn)
-        log.error(f"Connection with {addr} closed.")
-def send_updates(message):
-    if clients and message:
-        for conn in list(clients):
-            try:
-                conn.sendall(f'{len(message.encode('utf-8'))}\n'.encode())
-                conn.sendall(message.encode('utf-8'))
-            except Exception as e:
-                clients.remove(conn)
-                log.error(f"KS_Could not send message to client: {e}")
 
 # --- Инициализация ---
 manage_sticky_keys(disable=True)
@@ -197,27 +170,39 @@ def status_worker():
             log.error(f"Status port error: {e}")
         time.sleep(2) # Пауза между попытками подключения
 
-def display_worker():
-    while True:
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.connect(('localhost', ports['get_display']))
-                s.settimeout(None) # Убираем таймаут, ждем данных столько, сколько нужно
-                
-                while True: # Внутренний цикл: читаем сообщения из одного соединения
-                    data = safe_recv(s) # Используйте функцию из предыдущего ответа
-                    if data is None: break # Сервер разорвал соединение
-                    
-                    log.info(f"Display event: {data}")
-                    restart_panel() # ВНИМАНИЕ: если вызывать это тут, 
-                                     # панель будет рестартить на каждое движение!
-        except Exception as e:
-            log.error(f"Display connection error: {e}")
-            time.sleep(2) # Пауза перед переподключением при ошибке
+from socket_client import BaseSocketClient
+last_restart_time=0
+restart_lock = threading.Lock()
 
-# Запускаем фоновые потоки
-threading.Thread(target=status_worker, daemon=True).start()
+
+def display_worker():
+    client = BaseSocketClient(ports['get_display'], "Watchdog-Display", is_json=False)
+
+    def handle_display_event(data):
+        global last_restart_time
+        try:
+            msg = data.decode('utf-8', errors='replace').strip()
+        except:
+            msg = "unknown_event"
+
+        if not msg:
+            return
+
+        with restart_lock:
+            current_time = time.time()
+            
+            if current_time - last_restart_time > 10:
+                last_restart_time = current_time
+                
+                log.info(f"🖥️ Новое событие дисплея: [{msg}]. Перезапуск панели...")
+                restart_panel()
+            else:
+                log.debug(f"🖥️ Событие игнорируется (защита от спама): {msg}")
+    client.run_loop(handler=handle_display_event)
+
 threading.Thread(target=display_worker, daemon=True).start()
+
+threading.Thread(target=status_worker, daemon=True).start()
 try:
     while True:
 
@@ -247,7 +232,7 @@ try:
                 if os.path.exists(hb_file): os.remove(hb_file)
                 p[script] = subprocess.Popen([python_path, script])
                 
-        time.sleep(2)
+        time.sleep(5)
 
 except KeyboardInterrupt:
     terminate_everything()

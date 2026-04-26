@@ -1,0 +1,1 @@
+start "" "D:\Window-manager-for-Windows\tools\trey\trey.exe" "1160" "30" "300" "100"

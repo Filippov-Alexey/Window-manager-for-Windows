@@ -1,7 +1,9 @@
+from socket_client import BaseSocketClient
 from PIL import Image, ImageTk
 from queue import Queue
 from variable import *
 from plugins.alt_tab.variable import *
+from windows_server import bring_window_to_front, force_activate
 import socket
 import threading
 import pygetwindow
@@ -17,23 +19,6 @@ import win32com.client
 import logger
 log=logger.setup_logging()
 log.info('run')
-def force_activate(hwnd):
-    try:
-        shell = win32com.client.Dispatch("WScript.Shell")
-        shell.SendKeys('%') # Имитируем нажатие ALT
-        
-        # 1. Восстанавливаем окно, если оно свернуто
-        if win32gui.IsIconic(hwnd):
-            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
-        
-        # 2. Выводим на передний план
-        win32gui.SetForegroundWindow(hwnd)
-        # 3. Разворачиваем (опционально)
-        win32gui.ShowWindow(hwnd, win32con.SW_SHOW) 
-        return True
-    except Exception as e:
-        log.error(f"Ошибка: {e}")
-        return False
 
 # В вашем цикле используйте:
 def capture_window(hwnd, title):
@@ -72,68 +57,107 @@ def capture_window(hwnd, title):
 img=[]
 
 
+
 class alt_tab:
     def __init__(self, canvas, root, w, rect):
         self.root = root
         self.canvas = canvas
-        self.command_queue = Queue()
-        self.rect=rect
-        self.tag='alt_tab'
+        self.command_queue = Queue(maxsize=20) # Ограничиваем очередь команд
+        self.rect = rect
+        self.tag = 'alt_tab'
         self.is_active = False
         self.windows_data = []
         self.selected_index = 1
         self.tk_images = []
-
-        # 1. Запускаем ТОЛЬКО слушатель клавиатуры в фоне
-        threading.Thread(target=self.listen_keyboard, daemon=True).start()
-        threading.Thread(target=self.process_queue_tick, daemon=True).start()
-        
-        # 2. Запускаем цикл проверки очереди в ГЛАВНОМ потоке
-        self.process_queue_tick()
-
-        self.cache = {}          # {hwnd: PIL_Image}
-        self.last_hwnds = []     # [hwnd1, hwnd2, ...] для отслеживания порядка
-        self.windows_data = []   # Текущий рабочий список для отрисовки
-        
-        # Размер иконок (вынести в константу)
+        self.cache = {}          
+        self.last_hwnds = []     
         self.thumb_size = size 
 
-    def fetch_and_show_windows(self):
-        """Оптимизированный запрос: захват только новых или изменившихся окон"""
+        # 🟢 Инициализируем клиенты
+        self.win_client = BaseSocketClient(ports['get_win'], "AltTab-Win", is_zlib=True)
+        self.key_client = BaseSocketClient(ports['get_key'], "AltTab-Key")
+
+        # Запускаем потоки
+        threading.Thread(target=self.run_key_listener, daemon=True).start()
+        threading.Thread(target=self.process_queue_tick, daemon=True).start()
+
+    def _get_windows_metadata(self):
+        """Разовый запрос списка окон через унифицированный метод"""
+        return self.win_client.request()
+
+    def run_key_listener(self):
+        """Бесконечный цикл прослушивания клавиатуры"""
+        self.key_client.run_loop(handler=self.handle_key_event)
+
+    def handle_key_event(self, msg):
+        """Логика обработки нажатий (вынесена из сетевого цикла)"""
+        keys_str = '+'.join(key_run)
+        key = msg.get('key_name')
+        status = msg.get('status')
+        options = msg.get('option', '')
+
+        if msg.get('numpan') == 'Main':
+            # Проверка комбинации (например, Alt+Tab)
+            if keys_str in options and status == 'Down':
+                if not self.is_active:
+                    self.is_active = True
+                    self._safe_put_command(('PREPARE_AND_CAPTURE', None))
+                else:
+                    self._safe_put_command(('NEXT_STEP', None))
+
+            # Отпускание модификатора (например, Alt)
+            if key == key_run[0] and status == 'Up':
+                if self.is_active:
+                    self.is_active = False
+                    self._safe_put_command(('ACTIVATE_AND_CLEAR', None))
+
+    def _safe_put_command(self, cmd):
+        """Безопасная добавка команды в очередь без блокировки"""
         try:
-            # 1. Получаем список окон от сервера (только метаданные)
+            if self.command_queue.full():
+                self.command_queue.get_nowait()
+            self.command_queue.put_nowait(cmd)
+        except:
+            pass
+
+    def fetch_and_show_windows(self):
+        """Метод вызывается при обработке команды PREPARE_AND_CAPTURE"""
+        try:
             windows_list = self._get_windows_metadata()
-            if not windows_list: return
+            if not windows_list:
+                return
+            
+            current_hwnds = [item['hwnd'] for item in windows_list]
 
-            current_hwnds = [item[0] for item in windows_list]
-
-            # 2. ПРОВЕРКА: Если состав и порядок HWND не изменились — просто рисуем старое
             if current_hwnds == self.last_hwnds and self.windows_data:
                 self.draw_ui()
                 return
 
-            # 3. ОБНОВЛЕНИЕ: Формируем новый список данных
             new_windows_data = []
             new_cache = {}
-
             for i, item in enumerate(windows_list):
-                hwnd, title, path, rects = item[:4]
-                
-                # Логика: если это ПЕРВОЕ окно (i==0) ИЛИ его нет в кэше — делаем скриншот
-                if i == 0 or hwnd not in self.cache:
-                    img_raw = capture_window(hwnd, title)
-                    img = img_raw.resize(self.thumb_size) if img_raw else None
-                else:
-                    # Для всех остальных окон берем из кэша
-                    img = self.cache[hwnd]
-                
-                if img:
-                    new_cache[hwnd] = img
-                    new_windows_data.append({
-                        'hwnd': hwnd, 
-                        'title': title, 
-                        'img': img
-                    })
+                try:
+
+                    hwnd=item['hwnd']
+                    title=item['title']
+                    
+                    # Логика: если это ПЕРВОЕ окно (i==0) ИЛИ его нет в кэше — делаем скриншот
+                    if i == 0 or hwnd not in self.cache:
+                        img_raw = capture_window(hwnd, title)
+                        img = img_raw.resize(self.thumb_size) if img_raw else None
+                    else:
+                        # Для всех остальных окон берем из кэша
+                        img = self.cache[hwnd]
+                    
+                    if img:
+                        new_cache[hwnd] = img
+                        new_windows_data.append({
+                            'hwnd': hwnd, 
+                            'title': title, 
+                            'img': img
+                        })
+                except Exception as e:
+                    log.error(e )
 
             # 4. Сохраняем состояние
             self.cache = new_cache # Старые HWND (закрытые окна) удалятся из памяти
@@ -146,59 +170,10 @@ class alt_tab:
                     
         except Exception as e:
             log.error(f"Ошибка fetch_and_show_windows: {e}")
-
-    def _get_windows_metadata(self):
-        """Вспомогательный метод для сетевого обмена"""
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.connect(('localhost', ports['get_win']))
-            # Допустим, сервер сразу шлет список при подключении
-            raw_header = s.recv(4)
-            data_len = int.from_bytes(raw_header, 'big')
-
-# header = s.recv(10).decode('utf-8').strip()
-            # if not header: return None
-            
-            # data = s.recv(int(header))
-            data = s.recv(data_len)
-            decompressed = zlib.decompress(data)
-            return json.loads(decompressed.decode('utf-8', errors='replace'))
-
-    def listen_keyboard(self):
-        keys='+'.join(key_run)
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.connect(('localhost', ports['get_key']))
-
-            while True:
-                m=int.from_bytes(s.recv(4), 'big')
-                data=s.recv(m).decode('utf-8', errors='replace')
-                if not data: continue
-                try:
-                    msg = json.loads(data)
-                    key = msg.get('key_name')
-                    status = msg.get('status')
-                    options = msg.get('option', '')
-                    if msg.get('numpan')=='Main':
-                        # Нажали Alt + Left: отправляем сигнал на начало захвата
-                        if keys in options and status == 'Down':
-                            if not self.is_active:
-                                self.is_active = True
-                                # Кладем задачу в очередь для ГЛАВНОГО потока
-                                self.command_queue.put(('PREPARE_AND_CAPTURE', None))
-                            else:
-                                self.command_queue.put(('NEXT_STEP', None))
-
-                        # Отпустили Alt: закрываем интерфейс
-                        if key == key_run[0] and status == 'Up':
-                            if self.is_active:
-                                self.is_active = False
-                                self.command_queue.put(('ACTIVATE_AND_CLEAR', None))
-                except Exception as e:
-                    log.error(e)
     def process_queue_tick(self):
         try:
             if not self.command_queue.empty():
                 cmd, data = self.command_queue.get_nowait()
-                
                 if cmd == 'PREPARE_AND_CAPTURE':
                     # Выполняем захват окон (можно вынести в поток, если окон много)
                     self.fetch_and_show_windows()
@@ -221,7 +196,7 @@ class alt_tab:
             log.error(e)
             
         # Перезапуск проверки через 20мс
-        self.root.after(500, self.process_queue_tick)
+        self.root.after(20, self.process_queue_tick)
 
     def create_rectangle(self, x1, y1, x2, y2, **kwargs):
         tag = kwargs.pop("tags", self.tag) # Используем переданный тег или тег по умолчанию
@@ -299,7 +274,7 @@ class alt_tab:
                     try:
                         while i.isActive==False:
                             log.info(f'{tit[1]}-{i.isActive}')
-                            force_activate(i._hWnd)
+                            bring_window_to_front(i._hWnd)
                         break
                     except Exception as e:    
                         log.error(e)
