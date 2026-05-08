@@ -1,11 +1,15 @@
 from socket_client import BaseSocketClient
 from variable import *
+from variable_def import *
+import variable
 import pygetwindow
-import threading
 import subprocess
 import logger
 import mouse
-width,height=extension
+min_x,min_y,max_x,max_y = get_monitor()
+width = max_x-min_x
+height = max_y-min_y
+
 directions = {
     'home': (-1, -1), 'arrow_up': (0, -1), 'page_up': (1, -1),
     'arrow_left': (-1, 0),                 'arrow_right': (1, 0),
@@ -60,21 +64,19 @@ def handle_numpad_mouse(out):
     elif key == 'insert': 
         if not mouse.is_pressed(current_button): mouse.press(current_button)
     elif key == 'delete': mouse.release(current_button)
-    elif key == 'return' and status=='Down':subprocess.run([tools['press'],'return'])
+    elif key == 'return' and status=='Down':subprocess.run([components['tools']['press'],'return'])
 
 log=logger.setup_logging()
 
-stop_event = threading.Event()
 indexwin=0
 active_win=[]
 w=None
 i=1
 cur={}
-win_client = BaseSocketClient(ports['get_win'], "WinSpace-Switcher", is_zlib=True)
-
+ACTIONS=get_action()
 def handle_key_press(out):
-    global i, w, event, cur
-    
+    log.info(out)
+    global i, w, cur
     if out.get('isInjected') != 'Physical':
         return
 
@@ -93,35 +95,25 @@ def handle_key_press(out):
 
             elif value == 'left_win' and cur and cur.get('option', [None])[0] == value:
                 if cur.get('status') == 'Down':
-                    subprocess.run([tools['press'], 'left_win'])
+                    subprocess.run([components['tools']['press'], 'left_win'])
                     break
             elif value=='insert' and out.get('numpan')!='NumPad':
-                subprocess.run([tools['press'], 'f2'])
+                subprocess.run([components['tools']['press'], 'f2'])
 
     else:
         for value in valu:
-            # log.info(value)
-
             if value == 'left_win+space':
                 log.info('Смена раскладки для всех окон...')
-                
-                # 🟢 Получаем список окон одной командой
                 tit = win_client.request()
-                
                 if tit:
-                    # Извлекаем список HWND (win[0])
                     hwnds = [win['hwnd'] for win in tit]
-                    
                     try:
                         current_id = out.get('layout', {}).get('HKL')
                         if current_id:
-                            # Получаем hex следующей раскладки
                             hkl_hex = get_next_layout_hkl(current_id)[0]
-                            
-                            # Рассылаем команду смены раскладки по всем HWND
+                            log.info(hkl_hex)
                             for hwnd in hwnds:
-                                subprocess.run([tools['layout'], f'{hwnd}', f'{hkl_hex}'], 
-                                            capture_output=True) # Чтобы не спамить в консоль
+                                subprocess.run([components['tools']['layout'], f'{hwnd}', f'{hkl_hex}'], capture_output=True)
                     except Exception as e:
                         log.error(f'Ошибка смены раскладки: {e}')
                 break
@@ -129,16 +121,34 @@ def handle_key_press(out):
     cur = out
 
 
-def start_client():
+def start_client(stop_event): # <--- Принимаем stop_event
+    global win_client
+    log.info(variable.display)
+    win_client = BaseSocketClient(ports['get_win'], "WinSpace-Switcher", stop_event, is_zlib=True)
+    
+    # 1. Создаем клиент
     client = BaseSocketClient(
         port=ports['get_key'], 
-        name="KeyManager-Client"
+        name="KeyManager-Client",
+        stop_event=stop_event
     )
     
     log.info("KeyManager: попытка подключения к серверу клавиш...")
     
-    # run_loop берет на себя соединение, заголовок 4 байта и десериализацию JSON
-    client.run_loop(handler=handle_key_press)
+    try:
+        # 2. Передаем stop_event в основной цикл клиента
+        # Предполагается, что в BaseSocketClient.run_loop добавлена проверка этого события
+        client.run_loop(
+            handler=handle_key_press,
+            stop_event=stop_event 
+        )
+    except Exception as e:
+        log.error(f"❌ Ошибка в KeyManager-Client: {e}")
+    finally:
+        # 3. Гарантированно закрываем соединение при выходе
+        if hasattr(client, 'close'):
+            client.close()
+        log.info("🛑 Клиент KeyManager остановлен")
 
 if __name__ == "__main__":
     start_client()

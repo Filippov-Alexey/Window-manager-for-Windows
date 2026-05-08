@@ -1,3 +1,4 @@
+from variable_def import get_monitor
 from variable import *
 W_CPU   = 7 
 W_RAM   = 9
@@ -60,7 +61,9 @@ else:
     x=RECT // 2
     pos = [(x, y) for y in [15,35,55,85,105,125,145,175,190]]
 
-scr_w, scr_h = extension[0], extension[1]
+min_x,min_y,max_x,max_y = get_monitor()
+scr_w = max_x-min_x
+scr_h = max_y-min_y
         
 menu_width = 200
 row_height = 30
@@ -70,11 +73,11 @@ color_bg_menu='green'
 color_seletc_menu='red'
 
 listeners = [
-    ({"vol": "vol_pct", "mut": "vol_mut"}, [tools['vol']]),
-    ({"cpu_load_pct": "cpu"},              [tools['cpu']]),
-    ({"free_gb": "ram_free_gb"},           [tools['ram'], "gb"]),
-    ({"free_gb": "c_free_gb"},             [tools['disk'], "C", "gb"]),
-    ({"gpu_load_pct": "gpu_pct", "gpu_temp_c": "gpu_temp"}, [tools['gpu']]),
-    ({"rx": "down_bps", "tx": "up_bps"},   [tools['net'], "/a", "all", "/min", "kb"]),
+    ({"vol": "vol_pct", "mut": "vol_mut"}, [components['tools']['vol']]),
+    ({"cpu_load_pct": "cpu"},              [components['tools']['cpu']]),
+    ({"free_gb": "ram_free_gb"},           [components['tools']['ram'], "gb"]),
+    ({"free_gb": "c_free_gb"},             [components['tools']['disk'], "C", "gb"]),
+    ({"gpu_load_pct": "gpu_pct", "gpu_temp_c": "gpu_temp"}, [components['tools']['gpu']]),
+    ({"rx": "down_bps", "tx": "up_bps"},   [components['tools']['net'], "/a", "all", "/min", "kb"]),
 ]
 time_format="%H:%M" 

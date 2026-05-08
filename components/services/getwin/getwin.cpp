@@ -20,26 +20,39 @@ static std::string WideToUtf8(const std::wstring &ws)
     return dst;
 }
 
-static std::string EscapeForPyUtf8(const std::string &s)
+static std::string EscapeForJSON(const std::string &s)
 {
     std::string out;
-    out.reserve(s.size() * 2);
+    out.reserve(s.size() * 1.2); // Немного запаса для слэшей
     for (unsigned char ch : s) {
-        if (ch == '\\') out += "\\\\";
-        else if (ch == '\'') out += "\\'";
-        else if (ch == '\n') out += "\\n";
-        else if (ch == '\r') out += "\\r";
-        else out += static_cast<char>(ch);
+        switch (ch) {
+            case '\"': out += "\\\""; break; // Обязательно для JSON
+            case '\\': out += "\\\\"; break; // Обязательно для JSON
+            case '\b': out += "\\b";  break;
+            case '\f': out += "\\f";  break;
+            case '\n': out += "\\n";  break;
+            case '\r': out += "\\r";  break;
+            case '\t': out += "\\t";  break;
+            default:
+                if (ch < 0x20) {
+                    // Экранируем прочие управляющие символы (ASCII < 32)
+                    char buf[8];
+                    sprintf_s(buf, "\\u%04x", ch);
+                    out += buf;
+                } else {
+                    out += static_cast<char>(ch);
+                }
+        }
     }
     return out;
 }
-
+ 
 static std::string GetProcessPathFromHwndUtf8(HWND hwnd)
 {
     DWORD pid = 0;
     GetWindowThreadProcessId(hwnd, &pid);
     if (pid == 0) return "<unknown>";
-
+    
     std::vector<wchar_t> buf(32768);
     HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, FALSE, pid);
     if (h) {
@@ -77,23 +90,23 @@ struct EnumData {
 
 bool IsWindowSkippable(HWND hwnd) {
     if (!IsWindowVisible(hwnd)) return true;
-
+    
     int cloaked = 0;
     if (SUCCEEDED(DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &cloaked, sizeof(cloaked)))) {
         if (cloaked != 0) return true; 
     }
-
+    
     LONG exStyle = GetWindowLong(hwnd, GWL_EXSTYLE);
     LONG style = GetWindowLong(hwnd, GWL_STYLE);
-
+    
     if (exStyle & WS_EX_TOOLWINDOW) return true;
-
+    
     HWND owner = GetWindow(hwnd, GW_OWNER);
     if (owner != NULL) {
         wchar_t clsBuf[256];
         GetClassNameW(hwnd, clsBuf, 256);
         std::wstring cls(clsBuf);
-
+        
         bool isDialogClass = (cls == L"#32770");
         bool hasAppWindow = (exStyle & WS_EX_APPWINDOW);
         
@@ -101,7 +114,7 @@ bool IsWindowSkippable(HWND hwnd) {
             return true;
         }
     }
-
+    
     wchar_t clsBuf[256];
     if (GetClassNameW(hwnd, clsBuf, 256)) {
         std::wstring cls(clsBuf);
@@ -113,14 +126,13 @@ bool IsWindowSkippable(HWND hwnd) {
         }
     }
     if (GetWindowTextLengthW(hwnd) == 0) return true;
-
+    
     return false;
 }
 BOOL CALLBACK EnumWndProc(HWND hwnd, LPARAM lParam) {
     if (IsWindowSkippable(hwnd)) return TRUE; 
     EnumData* d = reinterpret_cast<EnumData*>(lParam);
 
-    // 1. ОПРЕДЕЛЕНИЕ ТИПА
     std::string winType = "normal";
     wchar_t clsCheck[256] = {0};
     GetClassNameW(hwnd, clsCheck, 256);
@@ -130,7 +142,6 @@ BOOL CALLBACK EnumWndProc(HWND hwnd, LPARAM lParam) {
         winType = "dialog";
     }
 
-    // 2. ДАННЫЕ ОКНА
     HWND foregroundHwnd = GetForegroundWindow();
     int isActive = (hwnd == foregroundHwnd) ? 1 : 0;
 
@@ -162,19 +173,35 @@ BOOL CALLBACK EnumWndProc(HWND hwnd, LPARAM lParam) {
 
     uintptr_t hid = reinterpret_cast<uintptr_t>(hwnd);
     std::string titleUtf8 = WideToUtf8(wtitle);
-    std::string escTitle = EscapeForPyUtf8(titleUtf8);
-    std::string escPath = EscapeForPyUtf8(procPathUtf8);
+    std::string escTitle = EscapeForJSON(titleUtf8);
+    std::string escPath  = EscapeForJSON(procPathUtf8);
+// 1. Получаем HICON (дескриптор иконки)
+HICON hIcon = (HICON)SendMessageW(hwnd, WM_GETICON, ICON_BIG, 0);
+if (!hIcon) {
+    hIcon = (HICON)SendMessageW(hwnd, WM_GETICON, ICON_SMALL, 0);
+}
+if (!hIcon) {
+    hIcon = (HICON)GetClassLongPtrW(hwnd, GCLP_HICON);
+}
+if (!hIcon) {
+    hIcon = (HICON)GetClassLongPtrW(hwnd, GCLP_HICONSM);
+}
 
-    // 3. ФОРМИРОВАНИЕ СЛОВАРЯ (Ключ: Значение)
-    // Используем формат Python dict: {'key': value}
-    std::string dictEntry = "{"
-        "'active': " + std::to_string(isActive) + ", " +
-        "'hwnd': " + std::to_string((unsigned long long)hid) + ", " +
-        "'title': '" + escTitle + "', " +
-        "'path': '" + escPath + "', " +
-        "'type': '" + winType + "', " +
-        "'rect': (" + std::to_string(rc.left) + ", " + std::to_string(rc.top) + ", " + std::to_string(rc.right) + ", " + std::to_string(rc.bottom) + "), " +
-        "'full': " + std::to_string(isFullscreen) + ""
+// 2. Превращаем адрес в строку для JSON
+unsigned long long hIconPtr = reinterpret_cast<unsigned long long>(hIcon);
+
+// 3. Добавляем в ваш JSON (dictEntry)
+std::string dictEntry = "{"
+    "\"active\":"   + std::to_string(isActive) + ","
+    "\"hwnd\":"     + std::to_string((unsigned long long)hid) + ","
+    "\"hicon\":"    + std::to_string(hIconPtr) + "," // ПЕРЕДАЕМ СЮДА
+    "\"title\":\""  + escTitle + "\","
+    // ... остальное
+
+        "\"path\":\""   + escPath + "\","
+        "\"type\":\""   + winType + "\","
+        "\"rect\":["    + std::to_string(rc.left) + "," + std::to_string(rc.top) + "," + std::to_string(rc.right) + "," + std::to_string(rc.bottom) + "],"
+        "\"full\":"     + std::to_string(isFullscreen) +
     "}";
 
     d->items->push_back(dictEntry);
@@ -184,7 +211,7 @@ BOOL CALLBACK EnumWndProc(HWND hwnd, LPARAM lParam) {
 int wmain(int argc, wchar_t* argv[])
 {
     SetConsoleOutputCP(CP_UTF8);
-
+    
     std::string filterUtf8;
     const std::string* filterPtr = nullptr;
     if (argc > 1) {
@@ -193,12 +220,12 @@ int wmain(int argc, wchar_t* argv[])
     }
 
     std::string lastOut = ""; // Хранилище предыдущего состояния
-
+    
     while (true) {
         std::vector<std::string> items;
         EnumData data{ &items, filterPtr };
         EnumWindows(EnumWndProc, reinterpret_cast<LPARAM>(&data));
-
+        
         // Сборка текущей строки JSON/Python list
         std::string currentOut = "[";
         for (size_t i = 0; i < items.size(); ++i) {

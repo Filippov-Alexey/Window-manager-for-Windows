@@ -1,18 +1,21 @@
 import threading
-import json
-import time
+import ujson
 import sys
 import pygetwindow
-from variable import ports,patterns,tools,desktop
 import win32gui
 import win32con
+from socket_client import BaseSocketClient
+from socket_server import BaseServer  
+from subprocess_server import BaseSubprocessServer
+from variable import ports, patterns, components, desktop
+import variable
 import logger
-log=logger.setup_logging()
-# Флаги и хранилища
-stop_event = threading.Event()
+
+log = logger.setup_logging()
 data_lock = threading.Lock()
 last_desktop_data = {"data": None}
 last_win_titles = {"data": []} 
+space_server = None
 
 SPACE_STEP = int(desktop['interval'])
 
@@ -23,7 +26,6 @@ def get_anchors_map():
             title = win32gui.GetWindowText(hwnd)
             if title.startswith("desktop_space_"):
                 try:
-                    # Извлекаем номер из заголовка desktop_space_1 -> 0
                     idx = int(title.split('_')[-1]) - 1
                     rect = win32gui.GetWindowRect(hwnd)
                     anchors[idx] = rect[0]
@@ -34,14 +36,10 @@ def get_anchors_map():
 
 def move_all_relative(target_idx):
     anchors = get_anchors_map()
-    
-    if not anchors:
-        log.info("⚠️ Якоря не найдены! Не могу определить смещение.")
-        return
+    if not anchors: return
     any_idx = next(iter(anchors))
     current_anchor_x = anchors[any_idx]
     ideal_anchor_x = any_idx * SPACE_STEP
-    
     global_offset = current_anchor_x - ideal_anchor_x
     shift_x = -(target_idx * SPACE_STEP) - global_offset
 
@@ -49,11 +47,9 @@ def move_all_relative(target_idx):
         if win32gui.IsWindowVisible(hwnd):
             title = win32gui.GetWindowText(hwnd)
             if title in patterns: return True
-            
             rect = win32gui.GetWindowRect(hwnd)
             x, y = rect[0], rect[1]
             if x < -10000 or x > 100000: return True
-
             try:
                 win32gui.SetWindowPos(
                     hwnd, None, x + int(shift_x), y, 0, 0,
@@ -61,24 +57,23 @@ def move_all_relative(target_idx):
                 )
             except: pass
         return True
-
     win32gui.EnumWindows(callback, None)
 
 def get_current_space_index():
     anchors = get_anchors_map()
-    if not anchors:
-        return 0
-    
-    # Берем любой якорь
+    if not anchors: return 0
     any_idx = next(iter(anchors))
     current_x = anchors[any_idx]
-    
     current_view = (any_idx * SPACE_STEP - current_x) // SPACE_STEP
     return int(current_view)
 
-def handle_key_press(raw_json_data):
+
+def handle_key_press(raw_data):
     try:
-        out = json.loads(raw_json_data)
+        if isinstance(raw_data, bytes):
+            raw_data = raw_data.decode('utf-8')
+        
+        out = ujson.loads(raw_data)
         if out.get('status') != 'Up': return
         
         items = out.get('option', [])
@@ -86,15 +81,11 @@ def handle_key_press(raw_json_data):
 
         if 'left_win' in keys_str:
             current_idx = get_current_space_index()
-            
             if 'page_up' in keys_str:
-                target_idx = min(current_idx + 1, 9)
-                move_all_relative(target_idx)
+                move_all_relative(min(current_idx + 1, 9))
                 return 
-                 
             elif 'page_down' in keys_str:
-                target_idx = max(current_idx - 1, 0)
-                move_all_relative(target_idx)
+                move_all_relative(max(current_idx - 1, 0))
                 return
 
         target_n = None
@@ -103,11 +94,9 @@ def handle_key_press(raw_json_data):
                 target_n = 9 if char == "0" else int(char) - 1
                 break
         
-        if not target_n is None: 
-
+        if target_n is not None: 
             if 'left_alt' in keys_str:
                 move_all_relative(target_n)
-
             elif 'left_ctrl' in keys_str:
                 active_win = pygetwindow.getActiveWindow()
                 if active_win:
@@ -115,33 +104,55 @@ def handle_key_press(raw_json_data):
                     if anchors:
                         any_idx = next(iter(anchors))
                         world_origin = anchors[any_idx] - (any_idx * SPACE_STEP)
-                        
                         rect = win32gui.GetWindowRect(active_win._hWnd)
                         rel_x = (rect[0] - world_origin) % SPACE_STEP
                         new_x = world_origin + (target_n * SPACE_STEP) + rel_x
-                        
                         win32gui.SetWindowPos(
                             active_win._hWnd, None, int(new_x), rect[1], 0, 0,
                             win32con.SWP_NOSIZE | win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE
                         )
         
-        space_server.broadcast(f"{get_current_space_index() + 1}")
+        if space_server:
+            space_server.broadcast(f"{get_current_space_index() + 1}")
 
     except Exception as e:
-        log.error(f"🚨 Error: {e}")
+        log.error(f"🚨 Keyboard Handle Error: {e}")
+
+def handle_win_data(raw_bytes):
+    with data_lock:
+        last_win_titles["data"] = raw_bytes
 
 
-from socket_client import BaseSocketClient
-import threading
-import time
-from socket_server import BaseServer  
-from subprocess_server import BaseSubprocessServer
-space_server=None
-def run_desktop_and_read_output():
+def socket_client_worker(port_name, handler, stop_event=None):
+    client = BaseSocketClient(
+        port=ports[port_name], 
+        name=f"Srv-{port_name}", 
+        is_json=False
+    )
+    log.info(f"📡 Воркер {port_name} запущен")
+    client.run_loop(handler=handler)
+
+def start_desktop_manager(stop_event): 
+    log.info(variable.display)
     global space_server
+    
     space_server = BaseServer(ports['get_space'], "SpaceServer", is_json=False, is_zlib=False)
     
-    cmd = [tools['space'], "/space", desktop['space'], "/x", desktop['x'], "/y", desktop['y']]
+    key_thread = threading.Thread(
+        target=socket_client_worker, 
+        args=('get_key', handle_key_press, stop_event),
+        daemon=True,
+        name="DesktopManager-KeyListener"
+    )
+    key_thread.start()
+
+    try:
+        from manager import win_manager
+        win_manager.subscribe(handle_win_data)
+    except ImportError:
+        log.warning("WinManager не найден, подписка пропущена")
+
+    cmd = [components['services']['space'], "/space", desktop['space'], "/x", desktop['x'], "/y", desktop['y']]
 
     class SpaceHandler(BaseSubprocessServer):
         def handle_data(self, data):
@@ -156,44 +167,23 @@ def run_desktop_and_read_output():
         label="SpaceServer"
     )
     
-    handler.run()
-
-
-def handle_win_data(raw_bytes):
-        with data_lock:
-            last_win_titles["data"] = raw_bytes
-            
-
-def socket_client_worker(port_name, handler, send_init=None):
-    client = BaseSocketClient(
-        port=ports[port_name], 
-        name=f"Srv-{port_name}", 
-        is_json=False
-    )
-
-    log.info(f"📡 Запуск воркера для порта {port_name}")
-    def protected_handler(data):
-        if not stop_event.is_set():
-            handler(data)
-    client.run_loop(
-        handler=protected_handler, 
-        init_msg=send_init
-    )
-from manager import win_manager  # Убедитесь, что импорт верный
+    log.info("🚀 Desktop Manager запущен")
+    
+    try:
+        handler.run() 
+    finally:
+        log.info("🧹 Завершение Desktop Manager...")
+        try:
+            from manager import win_manager
+            win_manager.unsubscribe(handle_win_data) 
+        except:
+            pass
+        
+        if hasattr(space_server, 'close'):
+            space_server.close()
 
 if __name__ == "__main__":
-    win_manager.subscribe(handle_win_data)
-    threads = [
-        threading.Thread(target=socket_client_worker, args=('get_key', handle_key_press), daemon=True),
-    ]
-
-    for t in threads:
-        t.start()
-
     try:
-        run_desktop_and_read_output()
+        start_desktop_manager()
     except KeyboardInterrupt:
-        log.info("\n🛑 Program stopping...")
-        stop_event.set()
-        time.sleep(1) # Время на закрытие процессов
         sys.exit(0)

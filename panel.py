@@ -1,16 +1,13 @@
 from ctypes import windll
 from tkinter import Tk, Canvas
-from variable import *
+from variable_def import *
 from manager import win_manager
 import os
 import importlib.util
 import time
 import subprocess
-import socket
-import json
-import zlib
+import variable
 import logger
-import threading
 
 log=logger.setup_logging()
 log.info('run')
@@ -101,23 +98,16 @@ def handle_client(conn, addr, root):
         clients.remove(conn)
 
 def set_taskbar_visible(visible=True):
-    cmd = 5 if visible else 0  # 5 - показать (SW_SHOW), 0 - скрыть (SW_HIDE)
-    
-    # 1. Основная панель задач
+    cmd = 5 if visible else 0  
     h_tray = windll.user32.FindWindowA(b'Shell_TrayWnd', None)
     if h_tray:
         windll.user32.ShowWindow(h_tray, cmd)
-
-    # 2. Дополнительные панели задач (на других мониторах)
-    # Ищем все окна с классом 'Shell_SecondaryTrayWnd'
     h_secondary = windll.user32.FindWindowExA(0, 0, b'Shell_SecondaryTrayWnd', None)
     while h_secondary:
         windll.user32.ShowWindow(h_secondary, cmd)
-        # Ищем следующую вторичную панель, если мониторов больше двух
         h_secondary = windll.user32.FindWindowExA(0, h_secondary, b'Shell_SecondaryTrayWnd', None)
 
 
-# Создаем сокет заранее (вне функции, чтобы не плодить подключения)
 import queue
 data_queue = queue.Queue() 
 
@@ -126,158 +116,82 @@ class State:
 
 state = State()
 
-def run_server():
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
-        server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        server_socket.bind(('localhost', 65438))
-        server_socket.listen(5)
-        time.sleep(5)
-        while True:
-            time.sleep(0.7)
-            # 1. Проверяем, не «протух» ли GUI (допустим, задержка > 1 сек)
-            if time.time() - state.last_tk_tick > 1.0:
-                try:
-                    conn, addr = server_socket.accept()
-                    with conn:
-                        
-                        # Логика отправки
-                        message = 'err\n'
-                        payload = message.encode('utf-8')
-                        conn.sendall(f'{len(payload)}\n'.encode())
-                        conn.sendall(payload)
-                except Exception as e:
-                    log.error(f"Ошибка: {e}")
-            else:            
-                try:
-                    conn, addr = server_socket.accept()
-                    with conn:
-                        
-                        # Логика отправки
-                        if not dq.empty():
-                            msg = dq.get_nowait()
-                            payload = msg.encode('utf-8')
-                            conn.sendall(f'{len(payload)}\n'.encode())
-                            conn.sendall(payload)
-                        # Ваша логика отправки...
-                except socket.timeout:
-                    # Если никто не подключился, просто идем на следующий круг While
-                    continue 
-                except Exception as e:
-                    log.error(f"Ошибка: {e}")
-dq=queue.Queue() 
-def update(canvas):
-    try:
-        # Обновляем метку времени — "я жив"
-        state.last_tk_tick = time.time()
-        
-        dq.put('ok\n')
-        
-        canvas.after(500, lambda: update(canvas))
-    except Exception as e:
-        log.error(f'err-{e}')
-
-threading.Thread(target=run_server, daemon=True).start()
-from socket_client import BaseSocketClient
-
-
-def socket_worker(q, port):
-    client = BaseSocketClient(
-        port=port, 
-        name=f"Panel-Port-{port}", 
-        is_json=False
-    )
-
-    def safe_put(data):
-        if q.full():
-            try: q.get_nowait()
-            except: pass
-        q.put(data)
-
-    client.run_loop(handler=safe_put, init_msg=b"a")
-
-thread = threading.Thread(
-    target=socket_worker, 
-    args=(data_queue, ports['get_win']), 
-    daemon=True
-)
-thread.start()
 icons_visible = None 
 ow = None
 
-def process_queue(canvas, q):
-    global ow, icons_visible
-    last_data = ''
+ow = None
+icons_visible = True
+
+def update_ui_state(canvas,should_be_visible):
+    global icons_visible
+    if should_be_visible != icons_visible:
+        new_state = 'normal' if should_be_visible else 'hidden'
+        canvas.itemconfigure("icon", state=new_state)
+        icons_visible = should_be_visible
+
+def process_windows_data(new_data):
+    global ow,canvas
+    
     try:
-        while not q.empty():
-            last_data = q.get_nowait()
+        if new_data is None or new_data == ow:
+            return
             
-        if last_data and last_data != ow:
-            ow = last_data
+        ow = new_data
+        
+       
+        if ow and isinstance(ow, list):
+            should_be_visible = (ow[0].get('full') == 0)
             
-            raw_json = zlib.decompress(last_data).decode('utf-8')
-            open_windows = json.loads(raw_json)
-            if open_windows:
-                should_be_visible = (open_windows[0]['full'] == 0)
-                
-                if should_be_visible != icons_visible:
-                    new_state = 'normal' if should_be_visible else 'hidden'
-                    canvas.itemconfigure("icon", state=new_state)
-                    icons_visible = should_be_visible
-                    
+            canvas.after(0, lambda: update_ui_state(canvas,should_be_visible))
+            
     except Exception as e:
-        log.error(f"Queue processing error: {e}")
-    finally:
-        canvas.after(60, lambda: process_queue(canvas, q))
+        log.error(f"Data processing error: {e}")
 
-def main():
-
+def main_func(stop_event): 
+    log.info(variable.display)
+    global canvas 
     root = Tk()
     root.title(TITLE)
 
-    # 1. Считаем общие габариты всех мониторов
-    monitors = get_monitors()
-    min_x = min(m.x for m in monitors)
-    min_y = min(m.y for m in monitors)
-    max_x = max(m.x + m.width for m in monitors)
-    max_y = max(m.y + m.height for m in monitors)
-
+    min_x, min_y, max_x, max_y = get_monitor()
     full_width = max_x - min_x
     full_height = max_y - min_y
 
-    # 2. Настраиваем окно
-    # Формат geometry: "ШиринаxВысота+СмещениеX+СмещениеY"
     root.geometry(f"{full_width}x{full_height}+{min_x}+{min_y}")
-
     root.overrideredirect(True)
     root.attributes('-topmost', True)
     root.attributes("-transparentcolor", "#45765a")
-
-    # 3. Создаем канвас на всю площадь
     canvas = Canvas(root, width=full_width, height=full_height, bg='#45765a', highlightthickness=0)
     canvas.pack()
 
-    # Скрыть всё
-    set_taskbar_visible(False)
-    color="#220294" 
-    bar=canvas.create_rectangle(0, 0, 400, RECT, fill=color, outline='')
-    canvas.addtag_withtag("icon", bar)
-    status(canvas,RECT,color)
-    shortcut(canvas,RECT,color)
-    k=0
+    def check_stop():
+        log.error('work')
+        if stop_event.is_set():
+            log.info("👋 Получен сигнал остановки Tkinter. Закрываю окно...")
+            root.destroy()
+        else:
+            root.after(500, check_stop)
+    win_manager.subscribe(process_windows_data)
 
-    p=load_plugins()
-    for i, module in enumerate(p):
+    set_taskbar_visible(False)
+    color = "#220294" 
+    bar = canvas.create_rectangle(0, 0, 400, RECT, fill=color, outline='')
+    canvas.addtag_withtag("icon", bar)
+    
+    status(canvas, RECT, color)
+    shortcut(canvas, RECT, color)
+
+    plugins = load_plugins()
+    k = 0
+    for i, module in enumerate(plugins):
         class_name = module.__name__.split('.')[-1]
-        # if class_name=='alt_tab':
-        #     continue
-        root.after(100 * (i + 1), lambda m=module, cn=class_name: getattr(m, cn)(canvas, root, RECT, extension[0]).run())
-        k=i
-    root.after(100*(k+1),lambda: subprocess.run([tools['press'],'packet']))
-    root.after(100*(k+2),lambda: update(canvas))
-    root.after(100*(k+3), lambda: process_queue(canvas, data_queue))
-    # Инициализация
-    # Убедитесь, что переменная ports импортирована или определена выше
-    win_manager.start()
+        root.after(100 * (i + 1), lambda m=module, cn=class_name: getattr(m, cn)(canvas, root, RECT, full_width, stop_event).run())
+        k = i
+
+    root.after(100 * (k + 1), lambda: subprocess.run([components['tools']['press'], 'packet']))
+    root.after(100 * (k + 2), lambda: process_windows_data(data_queue))
+
+
     root.mainloop()
-if __name__=="__main__":
-    main()
+if __name__ == "__main__":
+    main_func()

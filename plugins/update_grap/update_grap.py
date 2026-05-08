@@ -82,7 +82,6 @@ title_id = None
 
 def update_title(canvas, tit, RECT_HEIGHT):
     global active_title, index, title_id, full_string, _itemconfig
-    # log.info(tit)
     
     raw_text = tit[0]['title']
     display_text = None
@@ -90,12 +89,10 @@ def update_title(canvas, tit, RECT_HEIGHT):
     if _itemconfig is None:
         _itemconfig = canvas.itemconfigure
 
-    # 1. Логика бегущей строки
     if rec:
         if active_title != raw_text:
             active_title = raw_text
             index = 0
-            # Подготовка строки: отступы + текст
             clean_text = raw_text
             base_string = (" " * visible_length) + clean_text + "   "
             full_string = base_string * 2 
@@ -105,12 +102,10 @@ def update_title(canvas, tit, RECT_HEIGHT):
         display_text = full_string[pos : pos + visible_length]
         index += 1
     else:
-        # 2. Обычный статический режим
         if active_title != raw_text:
             active_title = raw_text
             display_text = (raw_text[:visible_length-3] + "...") if len(raw_text) > visible_length else raw_text
 
-    # 3. Отрисовка
     if title_id is None:
         title_id = canvas.create_text(
             1000, RECT_HEIGHT // 2, 
@@ -134,7 +129,7 @@ import queue
 from manager import win_manager  
 
 class update_grap:
-    def __init__(self, canvas, root, RECT_HEIGHT, w):
+    def __init__(self, canvas, root, RECT_HEIGHT, w,stop_event):
         self.canvas = canvas
         self.root = root
         self.RECT_HEIGHT = RECT_HEIGHT
@@ -143,21 +138,16 @@ class update_grap:
         self.current_raw_data = None  
         self.drawn_segments = set() 
         
-        # 1. Сначала подписываемся на менеджер (получаем уже готовый список)
         win_manager.subscribe(self.on_window_update)
 
-        # 2. Если данные в кэше уже есть — обрабатываем сразу при старте
         if win_manager.last_data:
             self.current_raw_data = win_manager.last_data
             self.graph_logic(win_manager.last_data)
 
-        # 3. Запускаем цикл проверки очереди
         self.run()
 
     def on_window_update(self, data):
-        """Метод вызывается менеджером при получении новых данных"""
         try:
-            # Фильтруем дубликаты сразу, чтобы не нагружать очередь
             if data != self.current_raw_data:
                 if self.data_queue.full():
                     self.data_queue.get_nowait()
@@ -167,11 +157,10 @@ class update_grap:
 
     def run(self):
         global points, tit
-        
         new_data = None
-        # Берем только самое свежее состояние из очереди
         while not self.data_queue.empty():
             new_data = self.data_queue.get_nowait()
+            # log.info(new_data)
             
         try:
             if new_data:

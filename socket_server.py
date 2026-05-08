@@ -1,5 +1,5 @@
 import socket
-import json
+import ujson
 import zlib
 import threading
 import logger
@@ -14,16 +14,17 @@ class BaseServer:
         self.is_zlib = is_zlib
         self.clients = set()
         self.clients_lock = threading.Lock()
-        # 🚩 Хранилище для последнего успешно подготовленного пакета
         self.last_packet = None 
 
     def broadcast(self, data):
-        """Рассылка данных и сохранение их как последних актуальных."""
         packet = self._prepare_packet(data)
-        if not packet: return
+        if packet:
+            self.last_packet = packet 
+        else:
+            return
 
-        # 🚩 Сохраняем пакет для будущих клиентов
-        self.last_packet = packet 
+        if not self.clients:
+            return
 
         with self.clients_lock:
             disconnected = []
@@ -39,7 +40,6 @@ class BaseServer:
     def _handle_client(self, conn, addr):
         log.info(f"[{self.name}] Новый клиент: {addr}")
         
-        # 🚩 ОТПРАВКА ПОСЛЕДНИХ ДАННЫХ ПРИ ПОДКЛЮЧЕНИИ
         if self.last_packet:
             try:
                 conn.sendall(self.last_packet)
@@ -54,7 +54,6 @@ class BaseServer:
         
         try:
             while True:
-                # Держим соединение
                 if not conn.recv(1024): break
         except:
             pass
@@ -66,12 +65,10 @@ class BaseServer:
 
     def _prepare_packet(self, data):
         try:
-            # Если мы передали уже готовую строку (наш JSON-ready-line)
             if isinstance(data, str):
                 payload = data.encode('utf-8')
-            # Если передан объект (список/словарь) и нужен JSON
             elif self.is_json:
-                payload = json.dumps(data).encode('utf-8')
+                payload = ujson.dumps(data).encode('utf-8')
             else:
                 payload = data # уже байты
             
@@ -83,7 +80,6 @@ class BaseServer:
             log.error(f"Ошибка подготовки пакета: {e}")
             return None
     def start(self):
-        """Запуск TCP сервера в отдельном потоке"""
         def run():
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)

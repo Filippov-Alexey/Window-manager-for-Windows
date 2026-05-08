@@ -1,7 +1,8 @@
 from socket_client import BaseSocketClient
 import time
 from variable import *
-import socket, threading,json,subprocess,queue
+from variable_def import *
+import threading,subprocess,queue
 import ctypes
 from ctypes import wintypes
 import logger
@@ -27,9 +28,7 @@ def get_layout_string(hkl_hex):
 
 
 class shift:
-    def __init__(self, canvas, root, w, rect):
-        self.root = root
-        self.canvas = canvas
+    def __init__(self, canvas, root, w, rect,stop_event):
         self.string = ''
         self.last_shift_time = 0
         self.double_tap_timeout = 8
@@ -89,17 +88,17 @@ class shift:
                 log.error(f"Ошибка при обработке задачи: {e}")
 
     def handle_double_shift(self, layout):
-        with subprocess.Popen([tools["buffer"]], stdout=subprocess.PIPE, text=True, encoding='utf-8') as proc:
-            subprocess.run([tools['press'], '_ctrl+x'])
+        with subprocess.Popen([components['tools']["buffer"]], stdout=subprocess.PIPE, text=True, encoding='utf-8') as proc:
+            subprocess.run([components['tools']['press'], '_ctrl+x'])
             raw_output = proc.stdout.read().strip('\x00')
         if not raw_output:
             raw_output = self.string
             for _ in self.string:
-                subprocess.run([tools['press'], 'backspace'])
+                subprocess.run([components['tools']['press'], 'backspace'])
         buf = raw_output[:-1].replace('\n', '\xf9').replace('    ', '\xf8').rstrip('\n')
         eng_chars = get_layout_string(layout.get('HKL'))
         rus_chars = get_layout_string(get_next_layout_hkl(layout.get('HKL'))[0])
         text = buf.translate(str.maketrans(eng_chars, rus_chars))
-        subprocess.run([tools['write'], text])
+        subprocess.run([components['tools']['write'], text])
     def run(self):
         pass

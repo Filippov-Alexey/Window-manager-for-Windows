@@ -35,8 +35,6 @@ def save_icon(icon_image, name, SHORTCUTS_DIR):
 from socket_client import BaseSocketClient
 
 def on_icon_click_factory(exe_path):
-    # 🟢 Создаем клиент один раз для всех вызовов handler
-    # Настраиваем на JSON + Zlib
     win_client = BaseSocketClient(ports['get_win'], "ShortCut-Click", is_zlib=True)
 
     def handler(event, _exe=exe_path):
@@ -46,11 +44,9 @@ def on_icon_click_factory(exe_path):
         restricted_paths = [os.path.normpath(p).lower() for p in open_one]
         window_found = False
 
-        # Если путь в списке ограничений — ищем уже открытое окно
         if target_path in restricted_paths:
             log.info(f"🔍 Поиск окна для: {target_path}")
             
-            # 🟢 Получаем список окон одной командой
             tit = win_client.request()
             
             if tit:
@@ -62,7 +58,6 @@ def on_icon_click_factory(exe_path):
                         window_found = True
                         break
 
-        # Если окно не найдено или путь не в списке — запускаем приложение
         if not window_found:
             try:
                 if os.path.exists(_exe):
@@ -75,7 +70,7 @@ def on_icon_click_factory(exe_path):
 
     return handler
 class shortcut_panel:
-    def __init__(self, canvas, root, shortcuts, w):
+    def __init__(self, canvas, root, shortcuts, w,stop_event):
         self.canvas = canvas
         self.root = root
         self.w = w
@@ -103,15 +98,14 @@ class shortcut_panel:
                         icon_image = Image.open(icon_file_path)
                     else:
                         try:
-                            icon_image = extract_icon_from_exe(resolve_path(icon_path))
+                            icon_image = extract_icon(resolve_path(icon_path))
                             save_icon(icon_image, shortcut.stem, shortcut_dir)
                         except Exception:
                             icon_image = Image.new("RGBA", (ICON_SIZE, ICON_SIZE), (0,0,0,0))
 
                     icon_image.thumbnail((ICON_SIZE, ICON_SIZE), Image.LANCZOS)
-                    photo = ImageTk.PhotoImage(icon_image)
+                    photo = ImageTk.PhotoImage(icon_image, master=self.root)
                     
-                    # Создаем объект с тегом "icon"
                     item_id = self.canvas.create_image(
                         x + ICON_SIZE // 2, y + RECT // 2, 
                         image=photo, tags="icon"
@@ -123,4 +117,4 @@ class shortcut_panel:
                     else: y += ICON_SIZE + GAP
         
     def run(self):
-        self.root.after(UPDATE_GRAPMS, self.run)
+        pass

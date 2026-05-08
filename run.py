@@ -7,25 +7,53 @@ import socket
 import winreg
 import ctypes
 import logger
+import display_server
+import windows_server
+import windows_controle
+import space_server
+import keyboard_server
+import keyboard_manager
+import panel
 from variable import *
+import variable
 log=logger.setup_logging()
 log.info('run')
 ORIGINAL_STICKY_FLAGS = None
-MAIN_SCRIPTS = ["windows_server.py", 
-                "display_server.py",
-                "windows_controle.py", 
-                "space_server.py",
-                "keyboard_server.py", 
-                "keyboard_manager.py", 
-                "panel.py"
-                ]
 venv_path = 'venv'
 python_path = os.path.join(venv_path, 'Scripts', 'python.exe')
 p = {}
 TIMEOUT = 10
-
-# Словарь для хранения времени изменения файлов variable.py
+RESTART_COOLDOWN = 2
 watched_files = {}
+
+JOBS_MAP = {
+    "display_server.py": display_server.run_mouse_and_read_output,
+    "keyboard_server.py": keyboard_server.run_mouse_and_read_output,
+    "windows_server.py": windows_server.c_plus_plus_listener,
+    "windows_controle.py": windows_controle.runmouse,
+    "space_server.py": space_server.start_desktop_manager,
+    "keyboard_manager.py": keyboard_manager.start_client,
+    "panel.py": panel.main_func
+}
+
+PORT_MAP = {
+    "display_server.py": ports.get('get_display'),
+    "windows_server.py": ports.get('get_win'),
+    "space_server.py": ports.get('get_space'),
+    "keyboard_server.py": ports.get('get_key')
+}
+
+def get_hb_path(script):
+    return os.path.join(os.getcwd(), "heartbeats", f"{script}.hb")
+
+def is_port_open(port):
+    if not port: return True
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=0.3):
+            return True
+    except:
+        return False
+
 
 def manage_sticky_keys(disable=True):
     global ORIGINAL_STICKY_FLAGS
@@ -52,34 +80,11 @@ def manage_sticky_keys(disable=True):
 
 def restart_explorer():
     subprocess.run("taskkill /f /im explorer.exe & start explorer.exe", shell=True)
-    # subprocess.run("explorer.exe")
 
 def get_hb_path(script):
     return f"hb_{script}.tmp"
 
-def stop_all_scripts():
-    """Завершает только запущенные дочерние скрипты"""
-    log.info("Остановка запущенных скриптов...")
-    for script, process in p.items():
-        if process.poll() is None:
-            process.terminate()
-            try:
-                process.wait(timeout=0)
-            except:
-                process.kill()
-        hb = get_hb_path(script)
-        if os.path.exists(hb): os.remove(hb)
-
-def start_all_scripts():
-    """Запускает все скрипты из списка"""
-    log.info("Запуск всех скриптов...")
-    for script in MAIN_SCRIPTS:
-        hb = get_hb_path(script)
-        if os.path.exists(hb): os.remove(hb)
-        p[script] = subprocess.Popen([python_path, script])
-
 def get_variable_files():
-    """Ищет все файлы variable.py во всех подкаталогах"""
     found_files = []
     for root, dirs, files in os.walk("."):
         if "variable.py" in files:
@@ -88,16 +93,13 @@ def get_variable_files():
 
 current_files = get_variable_files()
 def check_for_config_changes():
-    """Проверяет, изменился ли хоть один файл variable.py"""
     global watched_files
     changed = False
 
-    # Проверка на изменение существующих или появление новых файлов
     for file_path in current_files:
         mtime = os.path.getmtime(file_path)
         if file_path not in watched_files:
             watched_files[file_path] = mtime
-            # Если файл только найден, не считаем это изменением для перезапуска сразу
         elif watched_files[file_path] != mtime:
             watched_files[file_path] = mtime
             changed = True
@@ -105,137 +107,211 @@ def check_for_config_changes():
 
     return changed
 
-def terminate_everything():
-    """Полная очистка при выходе"""
-    log.info("\nЗавершение работы монитора...")
-    stop_all_scripts()
-    manage_sticky_keys(disable=False)
-    for i,k in tools.items():
-        subprocess.run(f'taskkill /im {k.split('\\')[-1]} /f'.split(), capture_output=True)
-
-# --- Инициализация ---
 manage_sticky_keys(disable=True)
-# Инициализируем список отслеживаемых файлов перед запуском
 for f in get_variable_files():
     watched_files[f] = os.path.getmtime(f)
-
-start_all_scripts()
-log.info('strt')
-
-
-def recv_fixed(sock, n):
-    """Вспомогательная функция: читает ровно n байт"""
-    data = b''
-    while len(data) < n:
-        packet = sock.recv(n - len(data))
-        if not packet: return None
-        data += packet
-    return data
-
-def safe_recv(sock):
-    # 1. Читаем заголовок до переноса строки (как отправляет сервер)
-    header = b''
-    while not header.endswith(b'\n'):
-        char = sock.recv(1)
-        if not char: return None
-        header += char
-    
-    # 2. Извлекаем длину и читаем ровно столько байт payload
-    length = int(header.decode().strip())
-    payload = recv_fixed(sock, length)
-    return payload.decode('utf-8', errors='replace')
-
-
-def restart_panel():
-    """Общая функция для перезапуска panel.py"""
-    for script in MAIN_SCRIPTS:
-        if script == 'panel.py':
-            terminate_everything()
-            process = p.get(script)
-            if process:
-                log.warning('Restarting panel.py...')
-                process.kill()
-            break
-
-def status_worker():
-    while True:
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.settimeout(5) # Чтобы поток не завис навечно
-                s.connect(('127.0.0.1', 65438))
-                data=safe_recv(s)
-                if data == 'err\n':
-                    restart_panel()
-        except Exception as e:
-            log.error(f"Status port error: {e}")
-        time.sleep(2) # Пауза между попытками подключения
 
 from socket_client import BaseSocketClient
 last_restart_time=0
 restart_lock = threading.Lock()
 
+import time
+import threading
 
-def display_worker():
-    client = BaseSocketClient(ports['get_display'], "Watchdog-Display", is_json=False)
 
-    def handle_display_event(data):
-        global last_restart_time
-        try:
-            msg = data.decode('utf-8', errors='replace').strip()
-        except:
-            msg = "unknown_event"
+def restart_panel():
+    global p, JOBS_STOP_EVENTS
+    name = 'panel.py'
+    
+    log.info(f"🔄 Рестарт модуля {name}...")
 
-        if not msg:
-            return
+    if name in JOBS_STOP_EVENTS:
+        JOBS_STOP_EVENTS[name].set()
+    
+    if name in PORT_MAP:
+        force_release_port(PORT_MAP[name])
 
-        with restart_lock:
-            current_time = time.time()
-            
-            if current_time - last_restart_time > 10:
+    try:
+        tools = components.get('tools', {})
+        for _, path in tools.items():
+            process_name = path.split('\\')[-1]
+            log.info(f"🔨 Принудительный taskkill: {process_name}")
+            subprocess.run(['taskkill', '/f', '/t', '/im', process_name], capture_output=True)
+    except Exception as e:
+        log.error(f"❌ Ошибка очистки процессов: {e}")
+
+    if name in p:
+        p[name].join(timeout=0.5)
+        if p[name].is_alive():
+            log.warning(f"⏳ {name} не ответил, удаляем ссылку")
+        del p[name]
+
+    if name in JOBS_STOP_EVENTS:
+        del JOBS_STOP_EVENTS[name]
+
+    log.info(f"✅ Модуль {name} очищен. Перезапуск...")
+    start_module([name])
+last_display_data = None 
+
+def handle_display_event(data=None): 
+    global last_restart_time, last_display_data
+    
+    if data is None:
+        log.warning("🔔 Событие получено, но данных нет")
+        return
+    
+    if data == last_display_data:
+        log.info("🔔 Событие дисплея: данные не изменились, игнорируем.")
+        return
+
+    log.info(f"🔔 Данные дисплея изменились: {data}")
+    
+    with restart_lock:
+        current_time = time.time()
+        diff = current_time - last_restart_time
+        
+        if diff > RESTART_COOLDOWN:
+            log.info(f"🖥️ Выполнение restart_panel... (Пауза: {diff:.1f}с)")
+            try:
+                start=True
+                if not last_display_data is None:
+                    restart_panel()
+                    start=False
+                variable.display = data
+                last_display_data = data 
                 last_restart_time = current_time
-                
-                log.info(f"🖥️ Новое событие дисплея: [{msg}]. Перезапуск панели...")
-                restart_panel()
+                log.debug('start')
+                if start:
+                    start_module()
+            except Exception as e:
+                log.error(f"❌ Ошибка рестарта: {e}")
+        else:
+            log.warning(f"⏳ Кулдаун активен: осталось {RESTART_COOLDOWN - diff:.1f}с")
+def display_worker(stop_event):
+    global last_restart_time
+    try:
+        client = BaseSocketClient(ports['get_display'], "Watchdog-Display", is_json=True)
+        log.info("📡 Поток отслеживания дисплеев подключен")
+        
+        client.run_loop(handler=handle_display_event, stop_event=stop_event)
+    except Exception as e:
+        if not stop_event.is_set():
+            log.error(f"❌ Ошибка сокета дисплея: {e}. Повтор через 5с...")
+JOBS_STOP_EVENTS = {} 
+def start_module(module_names=None):
+    target_names = module_names if module_names else list(JOBS_MAP.keys())
+    
+    for name in target_names:
+        if name in p:
+            if p[name].is_alive():
+                log.warning(f"⚠️ Модуль {name} уже работает. Пропускаем.")
+                continue
             else:
-                log.debug(f"🖥️ Событие игнорируется (защита от спама): {msg}")
-    client.run_loop(handler=handle_display_event)
+                del p[name]
+                if name in JOBS_STOP_EVENTS: del JOBS_STOP_EVENTS[name]
 
-threading.Thread(target=display_worker, daemon=True).start()
+        if name not in JOBS_MAP:
+            log.error(f"❌ Ошибка: Модуль {name} отсутствует в JOBS_MAP")
+            continue
 
-threading.Thread(target=status_worker, daemon=True).start()
-try:
-    while True:
-
-        if check_for_config_changes():
-            log.info("Конфигурация изменена. Перезапуск всех систем...")
-            stop_all_scripts()
-            start_all_scripts()
-
-        # 2. Мониторинг состояния процессов (Dead/Frozen)
-        for script in MAIN_SCRIPTS:
-            process = p[script]
-            hb_file = get_hb_path(script)
+        stop_event = threading.Event()
+        JOBS_STOP_EVENTS[name] = stop_event
+        t = threading.Thread(
+            target=JOBS_MAP[name], 
+            name=name, 
+            kwargs={'stop_event': stop_event}, 
+            daemon=True
+        )
+        
+        try:
+            t.start()
+            p[name] = t
+            log.info(f"✅ {name} запущен")
+        except Exception as e:
+            log.error(f"❌ Не удалось запустить {name}: {e}")
+def force_release_port(port):
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(0.1)
+            s.connect(('127.0.0.1', port))
+    except:
+        pass
+def stop_module(module_names=None):
+    target_names = module_names if module_names else list(p.keys())
+    
+    for name in list(target_names):
+        if name not in JOBS_STOP_EVENTS:
+            continue
             
-            is_dead = process.poll() is not None
-            is_frozen = False
-            
-            if not is_dead and os.path.exists(hb_file):
-                if time.time() - os.path.getmtime(hb_file) > TIMEOUT:
-                    is_frozen = True
+        log.info(f"🛑 Останавливаю {name}...")
+        JOBS_STOP_EVENTS[name].set()
+        if name in PORT_MAP:
+            force_release_port(PORT_MAP[name])
 
-            if is_dead or is_frozen:
-                log.info(f"Перезапуск: {script} (Причина: {'Мертв' if is_dead else 'Завис'})")
-                if not is_dead:
-                    process.kill()
-                    process.wait()
-                
-                if os.path.exists(hb_file): os.remove(hb_file)
-                p[script] = subprocess.Popen([python_path, script])
-                
+        if name in p:
+            if p[name]=='panel.py':
+                for i, k in components.get('tools', {}).items():
+                    process_name = k.split('\\')[-1]
+                    log.info(f"🔨 Taskkill: {process_name}")
+                    subprocess.run(['taskkill', '/f', '/im', process_name], capture_output=True)
+            p[name].join(timeout=3) 
+            if p[name].is_alive():
+                log.error(f"⚠️ {name} не завершился вовремя, будет убит при выходе программы")
+
+            
+            del p[name]
+            
+        del JOBS_STOP_EVENTS[name]
+        log.info(f"🚮 Модуль {name} полностью удален из памяти")
+
+log.info("🏁 Все модули успешно запущены.")
+log.info('strt')
+
+
+def start_all_threads():
+
+    stop_event_t9 = threading.Event()
+    t9 = threading.Thread(target=display_worker, args=(stop_event_t9,), daemon=True)
+    t9.start()
+
+def main():
+    try:
+        start_all_threads()
         time.sleep(5)
 
-except KeyboardInterrupt:
-    terminate_everything()
-    sys.exit(0)
-finally:
-    terminate_everything()
+        start_module()
+        
+        from manager import win_manager
+        win_manager.start()
+        while True:
+            if check_for_config_changes():
+                log.info("⚙️ Файлы изменены! Полная очистка и перезапуск...")
+                
+                restart_panel()        
+            for name in list(JOBS_MAP.keys()):
+                thread = p.get(name)
+                hb_file = get_hb_path(name)
+                
+                is_dead = thread is None or not thread.is_alive()
+
+                if is_dead:
+                    reason = "МЕРТВ" if is_dead else "ЗАВИС"
+                    log.warning(f"⚠️ Модуль {name} {reason}. Перезапуск только этого модуля...")
+                    
+                    if os.path.exists(hb_file): 
+                        try: os.remove(hb_file)
+                        except: pass
+                    
+                    if name in p: del p[name]
+                    start_module([name])
+
+            time.sleep(2)
+          
+    except KeyboardInterrupt:
+        log.info("Прервано пользователем")
+    finally:
+        stop_module()
+        sys.exit(0)
+
+if __name__ == "__main__":
+    main()
