@@ -63,7 +63,7 @@ def is_ignored(window_title):
             return True
     return False
 open_one=["C:\\Windows\\system32\\mspaint.exe"]
-win_size={"C:\\Users\\alexey\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe":(7,0,-6,-6)}
+win_size={"C:\\Users\\alexey\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe":(7,0,-6,-6),"O:\\program\\Obsidian\\Obsidian.exe":(6,0,-7,-7)}
 
 margin=5
 master_factor=0.5

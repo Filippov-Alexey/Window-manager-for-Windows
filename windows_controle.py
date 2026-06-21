@@ -3,30 +3,68 @@ import pygetwindow
 import threading
 import subprocess
 import time
-from variable import ports,win_size,components,RECT,tile_mode,master_factor,margin
+from variable import ports, win_size, components, RECT, tile_mode, master_factor, margin
 from variable_def import get_monitor, get_winpos
 import logger
 import win32process
 import win32api
 import win32con
+import ast  # ИСПРАВЛЕНО: Для безопасного разбора JSON-подобных строк с ключами без кавычек
 
-log=logger.setup_logging()
-indexwin=0
-active_win=[]
+log = logger.setup_logging()
+indexwin = 0
+active_win = []
 winpos = get_winpos()
 
+import re
+import json
 def keywork(stdout, stop_event):
-    while stop_event.is_set():  
+    while not stop_event.is_set():
         output = stdout.readline()
         if not output: 
             break
         output = output.strip()
         if output:
+            # Сразу пишем в лог сырую строку, чтобы видеть, что данные вообще идут
+            log.debug(f"Сырые данные из пайпа: {output}")
+            
             try:
-                result_data = output.split(': ')[1]
-                handle_key_press(result_data)
+                # Очищаем строку от фигурных скобок
+                clean = output.strip("{}")
+                
+                # Заводим пустой словарь под результат
+                parsed_data = {}
+                
+                # Разбиваем строку по запятым (учитывая, что внутри title кавычки экранированы на пробелы в C++)
+                parts = clean.split(", ")
+                
+                for part in parts:
+                    if ":" in part:
+                        # Делим на Ключ и Значение по первому двоеточию
+                        key, val = part.split(":", 1)
+                        key = key.strip()
+                        val = val.strip()
+                        
+                        # Очищаем значение от кавычек, если они есть
+                        if val.startswith('"') and val.endswith('"'):
+                            val = val[1:-1]
+                        
+                        # Пробуем преобразовать в число, если это code или hwnd
+                        if key in ['code', 'hwnd']:
+                            try:
+                                parsed_data[key] = int(val)
+                            except ValueError:
+                                parsed_data[key] = val
+                        else:
+                            parsed_data[key] = val
+                
+                # Если удалось вытащить базовые поля, отправляем в обработчик
+                if 'code' in parsed_data:
+                    handle_key_press(parsed_data)
+                    
             except Exception as e:
-                log.info(f"Error processing output: {e}\t{output}")
+                log.error(f"Критическая ошибка парсера Python: {e} | На строке: {output}")
+
 def get_path_from_hwnd(hwnd):
     try:
         _, pid = win32process.GetWindowThreadProcessId(hwnd)
@@ -35,15 +73,12 @@ def get_path_from_hwnd(hwnd):
             False, 
             pid
         )
-        
         if handle:
             path = win32process.GetModuleFileNameEx(handle, 0)
             win32api.CloseHandle(handle)
             return path
-            
     except Exception as e:
         return f"Ошибка: {e}"
-    
     return None
 
 def set_window_position(w, wp):
@@ -53,11 +88,13 @@ def set_window_position(w, wp):
     hw = w._hWnd
     target_data = next((item for item in tit if item['hwnd'] == hw), None)
     for item in tit:
-        log.info(f'{item['hwnd']}={hw}')
         if item['hwnd'] == hw:
-            log.info(hw)
             target_data = item
             break  
+    
+    if not target_data:
+        return
+
     path = target_data.get('path')
     title = target_data.get('title')
     size = win_size.get(path)
@@ -81,14 +118,15 @@ def set_window_position(w, wp):
     except Exception as e:
         log.error(f"Ошибка перемещения: {e}")
     
-def getindexwin(windows,winpos):
+def getindexwin(windows, winpos):
     if windows is not None:
-        centerx=windows.left+windows.width//2 
-        centery=windows.top+windows.height//2
-        for index,coord in winpos[1].items():
-            if coord[0]<centerx<coord[2] and coord[1]<centery<coord[3]:
+        centerx = windows.left + windows.width // 2 
+        centery = windows.top + windows.height // 2
+        for index, coord in winpos[1].items():
+            if coord[0] < centerx < coord[2] and coord[1] < centery < coord[3]:
                 return index
     return None
+
 def winmove(directions, w, i, indexwin=None):
     try:
         if not w:
@@ -96,7 +134,7 @@ def winmove(directions, w, i, indexwin=None):
 
         if directions in ['up', 'down', 'left', 'right']:
             try:
-                idx = getindexwin(w,winpos) 
+                idx = getindexwin(w, winpos) 
                 if directions == 'up':
                     log.info('up')
                     set_window_position(w, winpos['max'])
@@ -113,18 +151,15 @@ def winmove(directions, w, i, indexwin=None):
                 log.error(f"Manual move error: {e}")
                 return
 
-        min_x,min_y,max_x,max_y = get_monitor()
-        scr_w = max_x-min_x
-        scr_h = max_y-min_y
-
+        min_x, min_y, max_x, max_y = get_monitor()
+        scr_w = max_x - min_x
+        scr_h = max_y - min_y
         top_offset = RECT
-        
         mode = tile_mode
 
         curr_x, curr_y = margin, top_offset + margin
         work_w = scr_w - (margin * 2)
         work_h = scr_h - top_offset - (margin * 2)
-
 
         w.restore()
         if mode == 'bsp':
@@ -176,7 +211,6 @@ def winmove(directions, w, i, indexwin=None):
             else:
                 grid_positions = winpos.get(1, {})
                 max_predefined = len(grid_positions)
-
                 pos_index = i % max_predefined
                 rect = grid_positions.get(pos_index)
 
@@ -184,25 +218,61 @@ def winmove(directions, w, i, indexwin=None):
                     x1, y1, x2, y2 = rect
                     final_w = x2 - x1 - margin
                     final_h = y2 - y1 - margin
-
                     w.restore()
                     w.moveTo(int(x1), int(y1))
                     w.resizeTo(int(final_w), int(final_h))
-
     except Exception as e:
         log.error(f"Ошибка в winmove: {e}")
 
-def handle_key_press(out):
-    title=out.split(', ')[3][6:]
-    status=int(out.split(', ')[1][4:])
-    w=pygetwindow.getWindowsWithTitle(title)[0]
-    if status==3:
-        set_window_position(w, winpos['max'])
+def handle_key_press(data):
+    # ИСПРАВЛЕНО: Теперь работаем со словарем, а не строками. Полная поддержка кодов 0-15.
+    code = data.get('code')
+    title = data.get('title')
+    hwnd = data.get('hwnd')
+    name = data.get('name')
+    log.info(code)
+    
+    if title == "None" or not title:
+        return
+
+    log.info(f"Обработка события: {name} (Код {code}) для окна '{title}'")
+    
+    try:
+        # Ищем окно напрямую по его хендлу HWND через pygetwindow для 100% точности
+        # (Поиск по Title может найти не то окно, если имена совпадают)
+        all_windows = pygetwindow.getAllWindows()
+        w = next((win for win in all_windows if win._hWnd == hwnd), None)
+        
+        if not w:
+            # Резервный поиск по заголовку
+            windows = pygetwindow.getWindowsWithTitle(title)
+            if windows:
+                w = windows[0]
+
+        if not w:
+            return
+
+        # Вариант 1: Попытка развернуть окно (Код 3)
+        if code == 3:
+            set_window_position(w, winpos['max'])
+            
+        # Вариант 2: Перехват ручного перемещения (Код 12) -> Делаем автотайлинг (пример)
+        elif code == 12:
+            log.info(f"Окно '{title}' перемещено вручную. Запуск перерасчета сетки...")
+            # Тут вы можете вызвать вашу функцию перерасчета положения, например:
+            # winmove('right', w, 0, indexwin=2)
+
+    except Exception as e:
+        log.error(f"Ошибка в handle_key_press: {e}")
 
 def run_and_check(stop_event):
     while not stop_event.is_set():
+        # Передаем нужные коды блокировки в аргументы (например, блокируем ручной Move '12' и Size '13')
+        # Если блокировать ничего не нужно, а только слушать логи — передайте пустой список или '99'
+        cmd_args = [components['services']["win"], '12', '3'] 
+        
         process = subprocess.Popen(
-            [components['services']["win"]],
+            cmd_args,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -210,9 +280,8 @@ def run_and_check(stop_event):
         )
         
         time.sleep(2)
-        
         if process.poll() is None:
-            log.error("Процесс стабилен, работаем.")
+            log.error("Процесс win.exe стабилен, работаем.")
             return process
         
         log.info("Процесс упал мгновенно. Перезапуск...")
@@ -221,13 +290,13 @@ def run_and_check(stop_event):
 
 def runmouse(stop_event):
     process = run_and_check(stop_event)
-    
     if process is None:
         log.error("❌ Не удалось запустить процесс в runmouse.")
         return
+        
     output_thread = threading.Thread(
         target=keywork, 
-        args=(process.stdout,stop_event,), 
+        args=(process.stdout, stop_event), 
         name="KeyworkThread",
         daemon=True
     )
@@ -238,10 +307,8 @@ def runmouse(stop_event):
             if process.poll() is not None:
                 log.warning("⚠️ Процесс в runmouse завершился сам по себе")
                 break
-                
     finally:
         stop_event.set() 
-        
         if process.poll() is None:
             process.terminate()
             try:
@@ -254,4 +321,5 @@ def runmouse(stop_event):
         log.info("✅ Модуль runmouse полностью остановлен")
 
 if __name__ == "__main__":
-    runmouse()
+    stop_event = threading.Event()
+    runmouse(stop_event)

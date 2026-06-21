@@ -5,6 +5,8 @@
 #include <vector>
 #include <iostream>
 #include <algorithm>
+#include <set>
+
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "dwmapi.lib")
 #pragma comment(lib, "psapi.lib")
@@ -23,11 +25,11 @@ static std::string WideToUtf8(const std::wstring &ws)
 static std::string EscapeForJSON(const std::string &s)
 {
     std::string out;
-    out.reserve(s.size() * 1.2); // Немного запаса для слэшей
+    out.reserve(s.size() * 1.2);
     for (unsigned char ch : s) {
         switch (ch) {
-            case '\"': out += "\\\""; break; // Обязательно для JSON
-            case '\\': out += "\\\\"; break; // Обязательно для JSON
+            case '\"': out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
             case '\b': out += "\\b";  break;
             case '\f': out += "\\f";  break;
             case '\n': out += "\\n";  break;
@@ -35,7 +37,6 @@ static std::string EscapeForJSON(const std::string &s)
             case '\t': out += "\\t";  break;
             default:
                 if (ch < 0x20) {
-                    // Экранируем прочие управляющие символы (ASCII < 32)
                     char buf[8];
                     sprintf_s(buf, "\\u%04x", ch);
                     out += buf;
@@ -85,8 +86,8 @@ static std::string GetProcessPathFromHwndUtf8(HWND hwnd)
 struct EnumData {
     std::vector<std::string>* items;
     const std::string* filter;
+    std::set<HWND> processed_hwnds; 
 };
-
 
 bool IsWindowSkippable(HWND hwnd) {
     if (!IsWindowVisible(hwnd)) return true;
@@ -97,30 +98,14 @@ bool IsWindowSkippable(HWND hwnd) {
     }
     
     LONG exStyle = GetWindowLong(hwnd, GWL_EXSTYLE);
-    LONG style = GetWindowLong(hwnd, GWL_STYLE);
-    
     if (exStyle & WS_EX_TOOLWINDOW) return true;
-    
-    HWND owner = GetWindow(hwnd, GW_OWNER);
-    if (owner != NULL) {
-        wchar_t clsBuf[256];
-        GetClassNameW(hwnd, clsBuf, 256);
-        std::wstring cls(clsBuf);
-        
-        bool isDialogClass = (cls == L"#32770");
-        bool hasAppWindow = (exStyle & WS_EX_APPWINDOW);
-        
-        if (!isDialogClass && !hasAppWindow) {
-            return true;
-        }
-    }
     
     wchar_t clsBuf[256];
     if (GetClassNameW(hwnd, clsBuf, 256)) {
         std::wstring cls(clsBuf);
         if (cls == L"Progman" || cls == L"Shell_TrayWnd" || 
             cls == L"Windows.UI.Core.CoreWindow" || 
-            cls == L"IconTrayClone" || 
+            // cls == L"IconTrayClone" || 
             cls == L"EdgeUiInputTopWndClass") {
             return true;
         }
@@ -129,6 +114,7 @@ bool IsWindowSkippable(HWND hwnd) {
     
     return false;
 }
+
 BOOL CALLBACK EnumWndProc(HWND hwnd, LPARAM lParam) {
     if (IsWindowSkippable(hwnd)) return TRUE; 
     EnumData* d = reinterpret_cast<EnumData*>(lParam);
@@ -137,13 +123,55 @@ BOOL CALLBACK EnumWndProc(HWND hwnd, LPARAM lParam) {
     wchar_t clsCheck[256] = {0};
     GetClassNameW(hwnd, clsCheck, 256);
     std::wstring wclsCheck(clsCheck);
-    HWND owner = GetWindow(hwnd, GW_OWNER);
-    if (wclsCheck == L"#32770" || owner != NULL) {
-        winType = "dialog";
+    
+    HWND rootOwner = GetWindow(hwnd, GW_OWNER);
+    HWND rootAncestor = GetAncestor(hwnd, GA_ROOTOWNER);
+    if (!rootAncestor) {
+        rootAncestor = GetAncestor(hwnd, GA_ROOT);
     }
 
+    if (wclsCheck == L"#32770" || rootOwner != NULL || (rootAncestor && rootAncestor != hwnd)) {
+        winType = "main";
+        
+        if (rootOwner != NULL) {
+            hwnd = rootOwner;
+            while (HWND nextOwner = GetWindow(hwnd, GW_OWNER)) {
+                hwnd = nextOwner;
+            }
+        } else if (rootAncestor) {
+            hwnd = rootAncestor;
+        }
+        
+        ZeroMemory(clsCheck, sizeof(clsCheck));
+        GetClassNameW(hwnd, clsCheck, 256);
+        wclsCheck = clsCheck;
+    }
+
+    if (d->processed_hwnds.count(hwnd) > 0) {
+        return TRUE;
+    }
+    d->processed_hwnds.insert(hwnd);
+
     HWND foregroundHwnd = GetForegroundWindow();
-    int isActive = (hwnd == foregroundHwnd) ? 1 : 0;
+    int isActive = 0;
+    if (hwnd == foregroundHwnd) {
+        isActive = 1;
+    } else if (foregroundHwnd != NULL) {
+        HWND fgOwner = GetWindow(foregroundHwnd, GW_OWNER);
+        HWND fgAncestor = GetAncestor(foregroundHwnd, GA_ROOTOWNER);
+        
+        if (fgOwner == hwnd || fgAncestor == hwnd) {
+            isActive = 1;
+        } else {
+            while (fgOwner != NULL) {
+                if (fgOwner == hwnd) {
+                    isActive = 1;
+                    break;
+                }
+                fgOwner = GetWindow(fgOwner, GW_OWNER);
+            }
+        }
+    }
 
     int len = GetWindowTextLengthW(hwnd);
     std::wstring wtitle = L"";
@@ -164,7 +192,7 @@ BOOL CALLBACK EnumWndProc(HWND hwnd, LPARAM lParam) {
     HMONITOR hMonitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
     MONITORINFO mi = { sizeof(mi) };
     int isFullscreen = 0;
-    if (GetMonitorInfo(hMonitor, &mi)) {
+    if (GetMonitorInfoW(hMonitor, &mi)) {
         if (rc.left <= mi.rcMonitor.left && rc.top <= mi.rcMonitor.top && 
             rc.right >= mi.rcMonitor.right && rc.bottom >= mi.rcMonitor.bottom) {
             isFullscreen = 1;
@@ -175,34 +203,30 @@ BOOL CALLBACK EnumWndProc(HWND hwnd, LPARAM lParam) {
     std::string titleUtf8 = WideToUtf8(wtitle);
     std::string escTitle = EscapeForJSON(titleUtf8);
     std::string escPath  = EscapeForJSON(procPathUtf8);
-// 1. Получаем HICON (дескриптор иконки)
-HICON hIcon = (HICON)SendMessageW(hwnd, WM_GETICON, ICON_BIG, 0);
-if (!hIcon) {
-    hIcon = (HICON)SendMessageW(hwnd, WM_GETICON, ICON_SMALL, 0);
-}
-if (!hIcon) {
-    hIcon = (HICON)GetClassLongPtrW(hwnd, GCLP_HICON);
-}
-if (!hIcon) {
-    hIcon = (HICON)GetClassLongPtrW(hwnd, GCLP_HICONSM);
-}
 
-// 2. Превращаем адрес в строку для JSON
-unsigned long long hIconPtr = reinterpret_cast<unsigned long long>(hIcon);
+    HICON hIcon = (HICON)SendMessageW(hwnd, WM_GETICON, ICON_BIG, 0);
+    if (!hIcon) {
+        hIcon = (HICON)SendMessageW(hwnd, WM_GETICON, ICON_SMALL, 0);
+    }
+    if (!hIcon) {
+        hIcon = (HICON)GetClassLongPtrW(hwnd, GCLP_HICON);
+    }
+    if (!hIcon) {
+        hIcon = (HICON)GetClassLongPtrW(hwnd, GCLP_HICONSM);
+    }
 
-// 3. Добавляем в ваш JSON (dictEntry)
-std::string dictEntry = "{"
-    "\"active\":"   + std::to_string(isActive) + ","
-    "\"hwnd\":"     + std::to_string((unsigned long long)hid) + ","
-    "\"hicon\":"    + std::to_string(hIconPtr) + "," // ПЕРЕДАЕМ СЮДА
-    "\"title\":\""  + escTitle + "\","
-    // ... остальное
+    unsigned long long hIconPtr = reinterpret_cast<unsigned long long>(hIcon);
 
+    std::string dictEntry = "{"
+        "\"active\":"   + std::to_string(isActive) + ","
+        "\"hwnd\":"     + std::to_string((unsigned long long)hid) + ","
+        "\"hicon\":"    + std::to_string(hIconPtr) + ","
+        "\"title\":\""  + escTitle + "\","
         "\"path\":\""   + escPath + "\","
         "\"type\":\""   + winType + "\","
         "\"rect\":["    + std::to_string(rc.left) + "," + std::to_string(rc.top) + "," + std::to_string(rc.right) + "," + std::to_string(rc.bottom) + "],"
         "\"full\":"     + std::to_string(isFullscreen) +
-    "}";
+        "}";
 
     d->items->push_back(dictEntry);
     return TRUE;
@@ -219,14 +243,13 @@ int wmain(int argc, wchar_t* argv[])
         filterPtr = &filterUtf8;
     }
 
-    std::string lastOut = ""; // Хранилище предыдущего состояния
+    std::string lastOut = "";
     
     while (true) {
         std::vector<std::string> items;
-        EnumData data{ &items, filterPtr };
+        EnumData data{ &items, filterPtr, std::set<HWND>() };
         EnumWindows(EnumWndProc, reinterpret_cast<LPARAM>(&data));
         
-        // Сборка текущей строки JSON/Python list
         std::string currentOut = "[";
         for (size_t i = 0; i < items.size(); ++i) {
             currentOut += items[i];
@@ -234,13 +257,12 @@ int wmain(int argc, wchar_t* argv[])
         }
         currentOut += "]";
 
-        // ВЫВОД ТОЛЬКО ПРИ НАЛИЧИИ ИЗМЕНЕНИЙ
         if (currentOut != lastOut) {
             std::cout << currentOut << std::endl;
-            lastOut = currentOut; // Обновляем состояние
+            lastOut = currentOut;
         }
 
-        Sleep(100); // Пауза 0.5 сек, чтобы не грузить CPU
+        Sleep(100);
     }
 
     return 0;

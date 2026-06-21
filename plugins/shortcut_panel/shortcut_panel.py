@@ -67,7 +67,6 @@ def on_icon_click_factory(exe_path):
                     log.error(f"❌ Путь не существует: {_exe}")
             except Exception as e:
                 log.error(f"Ошибка запуска: {e}")
-
     return handler
 class shortcut_panel:
     def __init__(self, canvas, root, shortcuts, w,stop_event):

@@ -82,6 +82,8 @@ def get_action():
         'left_win+r':           lambda w, i: subprocess.run([components['tools']['press'], 'left_win+r']),
         'left_win+e':           lambda w, i: subprocess.run([components['tools']['press'], 'left_win+e']),
         'left_win+x':           lambda w, i: subprocess.run([components['tools']['press'], 'left_win+x']),
+        'left_win+o':           lambda w, i: subprocess.run(['O:\\program\\Obsidian\\Obsidian.exe']),
+        'left_win+w':           lambda w, i: subprocess.run(["C:\\Users\\alexey\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe"]),
         'shift+ctrl+z':lambda w, i: subprocess.run('D:\\winpanbat\\cc\\zn.bat'),
         'shift+ctrl+v':lambda w, i: subprocess.run('D:\\winpanbat\\cc\\vk.bat'),
         'shift+ctrl+o':lambda w, i: subprocess.run('D:\\winpanbat\\cc\\ok.bat'),
